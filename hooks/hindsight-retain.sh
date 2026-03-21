@@ -18,7 +18,8 @@ EXCLUDE_PATTERN='\.claude/(projects|hooks|settings)/'
 
 # Source per-project config if present (resolve symlinks to find conf next to actual script)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REAL_DIR="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
+REAL_DIR="$(cd "$SCRIPT_DIR" && cd "$(dirname "$(readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")")" && pwd)"
 for CONF_DIR in "$SCRIPT_DIR" "$REAL_DIR"; do
   if [ -f "$CONF_DIR/hindsight.conf" ]; then
     # shellcheck source=/dev/null

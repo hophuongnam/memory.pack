@@ -7,17 +7,16 @@ Uses **Hindsight** for long-term memory (retain / recall / reflect via MCP).
 ## Architecture
 
 ```
-Stop hook → session-marker.sh → writes session_id (if >5 user turns)
-
-Next session start → hindsight-session-start.sh (backgrounds, instant return)
-  → hindsight-replay.mjs:
-    1. Read previous transcript (Agent SDK)
+SessionEnd hook → hindsight-session-end.sh (detaches replay, instant exit)
+  → hindsight-replay.mjs (nohup, runs after session closes):
+    1. Read session transcript (Agent SDK)
     2. Sonnet summarizes → text (TITLE, SUMMARY, TODO, DECISIONS)
     3. Assesses whether session is worth retaining
     4. If RETAIN: sends summary to Hindsight via direct HTTP
-    5. Outputs boot context to file
+    5. Writes boot context to file
 
-Next user message → hindsight-boot-inject.sh → injects boot context via additionalContext
+Next session → hindsight-boot-inject.sh (SessionStart + UserPromptSubmit fallback)
+  → injects boot context via additionalContext
 ```
 
 Optional: `hindsight-retain.sh` — Stop hook that blocks agent to assess whether
@@ -44,11 +43,10 @@ Per-project config goes in `hooks/hindsight.conf` (BANK_ID, HINDSIGHT_URL).
 
 ## Key Design Decisions
 
-- No "session end" event — each session retroactively closes the previous one
-- Replay agent uses `nohup` to fully detach from hook runner (instant startup)
+- SessionEnd hook triggers replay directly — no marker files or retroactive closure
+- Replay agent detaches via `nohup` (SessionEnd timeout is 1.5s, replay runs after)
 - Atomic rename: boot context written to `.tmp` then `mv` to final path (avoids race with inject hook)
-- Trivial sessions (≤5 user turns) are skipped by the marker hook
-- Self-replay guard: skips replay when stored session ID matches current session ID
+- Trivial sessions (≤5 user turns) are skipped by the session-end hook
 - Retain is done by replay agent via direct HTTP to Hindsight (no MCP tools needed)
 - LLM (Sonnet) assesses whether session is worth retaining
 - Replay agent uses `maxTurns: 1` — no tool calls, just text output
