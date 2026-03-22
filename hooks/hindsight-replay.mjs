@@ -146,7 +146,9 @@ ${transcript}`,
       await hindsightRetain(retainContent);
     }
 
-    // Output the full result as boot context
-    console.log(result);
+    // Output boot context: strip the RETAIN/SKIP instruction line, add retained status
+    const bootLines = result.replace(/^(RETAIN|SKIP):.*$/ms, '').trimEnd();
+    const retainedStatus = retainMatch ? 'yes' : 'no';
+    console.log(`${bootLines}\nRETAINED: ${retainedStatus}`);
   }
 }
