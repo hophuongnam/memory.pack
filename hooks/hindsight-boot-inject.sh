@@ -11,6 +11,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BOOT_CTX="$SCRIPT_DIR/.hindsight-boot-context"
 PID_FILE="$SCRIPT_DIR/.hindsight-replay-pid"
 
+# Per-project boot status for statusline
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_HASH=$(echo -n "$PROJECT_DIR" | md5 | head -c 8)
+BOOT_STATUS_FILE="/tmp/claude-statusline/boot-status-${PROJECT_HASH}"
+mkdir -p /tmp/claude-statusline
+
 # Check if replay is still running
 replay_running() {
   [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null
@@ -30,8 +36,6 @@ if [ "$EVENT" = "UserPromptSubmit" ] && [ ! -f "$BOOT_CTX" ] && replay_running; 
 fi
 
 STATUS=""
-BOOT_STATUS_FILE="/tmp/claude-statusline/boot-status"
-mkdir -p /tmp/claude-statusline
 if [ -f "$BOOT_CTX" ]; then
   CONTEXT=$(cat "$BOOT_CTX")
   rm -f "$BOOT_CTX"
