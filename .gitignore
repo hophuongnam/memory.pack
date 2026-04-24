@@ -1,0 +1,5 @@
+hooks/.boot-context-*
+hooks/.boot-context-*.tmp
+hooks/.boot-marker-*
+hooks/.replay-pid-*
+hooks/.replay-error-*

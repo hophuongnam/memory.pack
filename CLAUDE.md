@@ -1,52 +1,64 @@
 # Memory Pack
 
-Session continuity + long-term memory system for Claude Code projects.
+Session continuity + auto-save tooling for Claude Code. Wired globally from
+`~/.claude/settings.json` — the hooks in `hooks/` are called by absolute path,
+not symlinked into each project.
 
-Uses **Hindsight** for long-term memory (retain / recall / reflect via MCP).
+## Active hooks
 
-## Architecture
+| Event              | Script              | Purpose                                                      |
+|--------------------|---------------------|--------------------------------------------------------------|
+| `Stop`             | `auto-save-stop.sh` | Every 30 user turns, block and tell Claude to save memory    |
+| `SessionEnd`       | `session-end.sh`    | Detach `replay.mjs` via nohup; it writes next boot context   |
+| `SessionStart`     | `boot-inject.sh`    | Inject previous session's boot context via `additionalContext` |
+| `UserPromptSubmit` | `boot-inject.sh`    | Fallback inject; polls up to 5s if replay still running      |
 
-```
-SessionEnd hook → hindsight-session-end.sh (detaches replay, instant exit)
-  → hindsight-replay.mjs (nohup, runs after session closes):
-    1. Read session transcript (Agent SDK)
-    2. Sonnet summarizes → text (TITLE, SUMMARY, TODO, DECISIONS)
-    3. Assesses whether session is worth retaining
-    4. If RETAIN: sends summary to Hindsight via direct HTTP
-    5. Writes boot context to file
-
-Next session → hindsight-boot-inject.sh (SessionStart + UserPromptSubmit fallback)
-  → injects boot context via additionalContext
-```
-
-Optional: `hindsight-retain.sh` — Stop hook that blocks agent to assess whether
-code changes since last retain need to be retained to Hindsight.
-
-## Project Structure
+## Flow
 
 ```
-hooks/          — Claude Code hook scripts (source of truth)
-skills/         — SKILL.md files for Hindsight
-docs/           — Architecture documentation
+Session N ends
+  └─ session-end.sh
+       ├─ skip if ≤5 user turns
+       └─ nohup node replay.mjs <session-id> <cwd>
+             ├─ getSessionMessages() via @anthropic-ai/claude-agent-sdk
+             ├─ Sonnet 4.6, maxTurns:1 → TITLE / SUMMARY / TODO / DECISIONS
+             └─ stdout → .boot-context-<hash>.tmp → atomic mv
+
+Session N+1 starts (same project)
+  └─ boot-inject.sh (SessionStart, then UserPromptSubmit)
+       ├─ hash cwd → read .boot-context-<hash>
+       ├─ if replay still running: poll up to 5s
+       └─ emit hookSpecificOutput.additionalContext
 ```
+
+## Per-project scoping
+
+Boot context and replay PID files live in `hooks/` and are keyed by a short
+md5 of the hook input's `cwd`:
+
+- `.boot-context-<hash>` — the pending boot summary
+- `.replay-pid-<hash>` — PID of the running replay, used by the inject hook to
+  decide whether to poll
+
+Without the hash, project A's replay output would leak into project B's next
+session. Both hooks must compute the hash the same way (`printf '%s' "$CWD" |
+md5 | head -c 8`).
 
 ## Dependencies
 
-- `@anthropic-ai/claude-agent-sdk` (npm global) — Agent SDK for replay agent
-- Hindsight server at URL configured in `hooks/hindsight.conf`
-- `jq` — JSON parsing in shell hooks
+- `@anthropic-ai/claude-agent-sdk` installed globally at
+  `/opt/homebrew/lib/node_modules/` — `replay.mjs` imports `sdk.mjs` directly.
+- `jq` — hook input parsing.
+- `python3` — `auto-save-stop.sh` uses it to parse the JSONL transcript.
 
-## Deployment
+## auto-save-stop.sh
 
-Hook files are copied (or symlinked) to each project's `.claude/hooks/` directory.
-Per-project config goes in `hooks/hindsight.conf` (BANK_ID, HINDSIGHT_URL).
+Counts user messages in the transcript, skipping `<command-message>` entries.
+Every `SAVE_INTERVAL` (30) it returns `{"decision":"block", "reason":"..."}`
+with instructions to write to `~/.claude/projects/*/memory/`. The `stop_hook_active`
+guard prevents infinite loops — once Claude saves and tries to stop again, the
+hook lets it through. State lives in `$HOME/.claude/hook_state/`:
 
-## Key Design Decisions
+- `<session-id>_last_save` — last exchange count at which a save fired
+- `hook.log` — rolling log of exchanges seen
 
-- SessionEnd hook triggers replay directly — no marker files or retroactive closure
-- Replay agent detaches via `nohup` (SessionEnd timeout is 1.5s, replay runs after)
-- Atomic rename: boot context written to `.tmp` then `mv` to final path (avoids race with inject hook)
-- Trivial sessions (≤5 user turns) are skipped by the session-end hook
-- Retain is done by replay agent via direct HTTP to Hindsight (no MCP tools needed)
-- LLM (Sonnet) assesses whether session is worth retaining
-- Replay agent uses `maxTurns: 1` — no tool calls, just text output
