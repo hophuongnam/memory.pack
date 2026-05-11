@@ -76,6 +76,50 @@ Thresholds used by `/memory-lint --decay`:
 
 Archive is a proposal, not auto-action. The lint run surfaces candidates and waits for per-item user confirmation before touching any file.
 
+## Auto-resurrect on slug collision
+
+The archive is not a graveyard — it is a recurrence detector. `Memory.Pack/hooks/archive-resurrect.sh` (PostToolUse on Write) fires every time a memory file is written and silently inherits archived metadata when the new file's basename collides with an entry in `<memory-dir>/archive/`. No prompt, no merge of body content.
+
+**Trigger:** Write to `~/.claude/projects/<slug>/memory/<basename>.md` AND `<same-dir>/archive/<basename>.md` exists.
+
+**Action (atomic, in-place rewrite of the new file):**
+1. Inherit `created` from the archived file — preserves the original "first learned" date.
+2. Inherit `recall_count` from the archived file — preserves the recurrence signal (a memory archived with `recall_count: 5` and now re-written stays at 5; the recall hook will continue to bump it from there).
+3. Stamp `last_reviewed: <today>` so the freshly-resurrected memory does not immediately re-trigger decay.
+4. Drop `last_recalled` carried over from the pre-archive era — it is stale; the recall hook will repopulate on next Read.
+5. Delete the archive copy.
+6. Append a one-line audit entry to `<memory-dir>/.archive-resurrect.log` (dotfile, skipped by `/memory-lint`).
+
+**Exact-slug match only.** Paraphrased slugs (e.g. archived `feedback_sqlite_wal.md` vs new `feedback_sqlite_wal_required.md`) are intentionally not caught. False positives — silently destroying a valid new memory by inheriting wrong metadata — would be worse than false negatives, which the user can fix manually with `mv archive/<file> ./` and an Edit.
+
+**Why no body merge.** The new write is, by construction, Claude's current understanding. The archived body is by definition stale (it crossed `strength < 0.1` to be archived). Auto-merging risks re-introducing contradicted information; letting the new body win is honest about which version is canonical now. The recurrence signal lives in the metadata, not the prose.
+
+**Interaction with `/memory-lint --decay`.** A resurrected memory looks like a high-strength memory with an old `created` date — exactly the right shape. The strength formula already handles it: `Δt` is anchored to `last_reviewed` (today), so strength resets to ~1; `recall_count` carries over and continues to flatten the future decay curve.
+
+## Auto-promote on recall threshold
+
+Archive is also not a one-way gate. `Memory.Pack/hooks/update-recall.mjs` (backgrounded by `memory-recall.sh` PostToolUse on Read) fires when an **archived** memory is Read mid-session, bumps `recall_count` and `last_recalled` like any other recall, and — if the post-bump `recall_count` clears `MEMORY_PROMOTION_THRESHOLD` (default `3`) — atomically moves the file out of `archive/` and back into the active memory dir.
+
+**Trigger:** Read of `~/.claude/projects/<slug>/memory/archive/<basename>.md` AND post-bump `recall_count >= MEMORY_PROMOTION_THRESHOLD`.
+
+**Action (atomic):**
+1. Bump `recall_count` and `last_recalled` in the archived file's frontmatter (normal recall flow).
+2. `renameSync` the file from `<dir>/archive/<basename>.md` to `<dir>/<basename>.md`.
+3. Move the per-session recall sidecar (`.recalled-<sid>-<slug>.touched`) from `archive/` to the active dir so same-session re-Reads still dedup correctly.
+4. Insert an entry into `MEMORY.md` under the type-appropriate section (`## User & feedback` / `## Projects` / `## Infrastructure & reference`), idempotent on filename collision.
+5. Background-trigger the FTS5 indexer to delete the archive entry and insert the active entry.
+6. Append a one-line audit entry to `<memory-dir>/.archive-promote.log` (dotfile, skipped by `/memory-lint`).
+
+**Threshold rationale.** The recall hook is per-session-deduplicated via `.recalled-<sid>-<slug>.touched` sidecars, so `recall_count: 3` represents Read in 3 distinct sessions post-archive. Two-session repeat is plausibly incidental; three is a strong signal the memory is still load-bearing. The threshold is absolute (not delta-since-archive) because the schema does not track an `archived_at_recall_count` field — adding one is possible but not currently warranted. Memories archived with a high pre-archive `recall_count` (e.g. 5) will auto-promote on the first post-archive Read; that is the correct behavior — they were popular before, they're being read again, calling them archived is wrong.
+
+**Collision handling.** If an active file with the same basename already exists at the destination (e.g. user wrote a new memory with the same name while the archived copy was still in archive), promotion is skipped and a `skip-collision` line is appended to the audit log. The active file is the canonical version.
+
+**Failure isolation.** Any error during promotion is caught and logged; the recall bump itself succeeds regardless. Worst case: file stays in archive with the bumped counter, and the next Read in another session retries promotion.
+
+## Indexed non-memory artifacts
+
+The FTS5 search index at `Memory.Pack/index/search.db` (covered separately by the search infrastructure docs) intentionally indexes `sessions.log.md` files in addition to canonical memory files. Sessions logs have **no real frontmatter** — `index/index-memories.py` synthesizes metadata for them (`type: session`, `name: "Session log — <project slug>"`, `description: "Append-only replay summaries…"`) so they participate in search uniformly. Use `--type session` (or `--type !=session` patterns) on the search CLI to filter them in or out. They surface narrative continuity that never got promoted to a memory — useful for cross-session topic recall, less useful for "what's the rule for X" lookups.
+
 ## Types
 
 ### `user`

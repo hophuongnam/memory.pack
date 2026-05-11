@@ -5,10 +5,19 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+# Field-name aliases: CC's published hook docs say snake_case but the
+# runtime hook stdin emits camelCase in some CC versions (see
+# reference_cc_hook_input_fields.md). boot-inject.sh accepts both via jq
+# `//`; this hook must do the same. When the PROJECT_DIR fallback
+# misfires, replay writes the boot context to a hash that's the user's
+# subdir (e.g. `.../NexusLit/src-tauri` after `cd src-tauri`), the next
+# session in the actual project root looks for the project-root hash and
+# sees nothing, and the replay agent is fed the wrong project's
+# MEMORY.md / SESSIONS.md as well.
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // empty')
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty')
 # Prefer workspace.project_dir (stable across cd's) to match statusline-command.sh.
-PROJECT_DIR=$(echo "$INPUT" | jq -r '.workspace.project_dir // empty')
+PROJECT_DIR=$(echo "$INPUT" | jq -r '.workspace.project_dir // .workspace.projectDir // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
 [ -z "$SESSION_ID" ] && exit 0
@@ -60,7 +69,7 @@ find "$SCRIPT_DIR" -maxdepth 1 -name '.boot-marker-*' -mtime +3 -delete 2>/dev/n
 # /tmp/replay-error.log so the failure is self-reporting — no need to cat a log.
 nohup sh -c "echo \$\$ >\"$PID_FILE\"; \
   osascript -e 'display notification \"Replay started\" with title \"Claude Code · $PROJECT_NAME\"' >/dev/null 2>&1 || true; \
-  node \"$REPLAY\" \"$SESSION_ID\" \"${CWD:-$PWD}\" \
+  node \"$REPLAY\" \"$SESSION_ID\" \"$PROJECT_KEY\" \
   >\"$BOOT_CTX.tmp\" 2>/tmp/replay-error.log; \
   STATUS=\$?; \
   if [ \$STATUS -eq 0 ] && [ -s \"$BOOT_CTX.tmp\" ]; then \

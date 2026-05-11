@@ -3,11 +3,29 @@
 # Wired to both SessionStart (immediate) and UserPromptSubmit (fallback).
 # Checks for .boot-context written by session-end.sh.
 INPUT=$(cat)
-EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // "UserPromptSubmit"')
-# Prefer workspace.project_dir (stable across cd's) to match statusline-command.sh.
-PROJECT_DIR=$(echo "$INPUT" | jq -r '.workspace.project_dir // empty')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+# Single jq call extracts all four fields together — each separate jq fork
+# is ~30-40ms on macOS, and four serial calls pushed the early marker write
+# below past the 50ms window where statusline-command.sh races us. Tab
+# delimiter is safe because none of these fields can contain tabs.
+#
+# Field-name aliases: CC's published hook docs say snake_case
+# (`session_id`, `hook_event_name`), but the runtime hook stdin emits
+# camelCase (`sessionId`, `hookEventName`) in some CC versions. Accept
+# both via jq `//` fallback so the marker write doesn't silently no-op
+# when CC's field naming flips. Symptom we hit: SessionStart hook ran in
+# 164ms with a successful stdout, but no `.boot-marker-${SESSION_ID}`
+# file landed because SESSION_ID parsed empty → marker write was gated
+# off.
+IFS=$'\t' read -r EVENT PROJECT_DIR CWD SESSION_ID <<<"$(echo "$INPUT" | jq -r '[.hook_event_name // .hookEventName // "UserPromptSubmit", .workspace.project_dir // .workspace.projectDir // "", .cwd // "", .session_id // .sessionId // ""] | @tsv')"
+# Last-resort: derive session_id from transcript_path basename if both
+# field-name variants returned empty. CC always passes transcript_path,
+# and the filename is `${SESSION_ID}.jsonl`.
+if [ -z "$SESSION_ID" ]; then
+  TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // ""')
+  if [ -n "$TRANSCRIPT_PATH" ]; then
+    SESSION_ID=$(basename "$TRANSCRIPT_PATH" .jsonl)
+  fi
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -50,15 +68,36 @@ if [ "$EVENT" = "UserPromptSubmit" ] && [ -n "$PRIOR_MARKER" ] && [ "$PRIOR_MARK
   fi
 fi
 
+# Write marker BEFORE polling, so the statusline has something to read even
+# if CC kills this hook at the timeout. The Mira project's replay agent
+# routinely takes minutes (large repo) — the SessionStart polling loop
+# below would consistently exceed CC's 5s timeout, the hook would be
+# cancelled, no marker would be written, and the user would see no boot
+# indicator at all. Writing here closes that gap: even on timeout, the
+# statusline shows ⏳pending instead of nothing, and the next
+# UserPromptSubmit can self-heal once BOOT_CTX appears.
+if [ -n "$SESSION_ID" ]; then
+  if [ -f "$BOOT_CTX" ]; then
+    EARLY_MARKER_STATE="loaded"
+  elif replay_running; then
+    EARLY_MARKER_STATE="pending"
+  else
+    EARLY_MARKER_STATE="none"
+  fi
+  printf '%s' "$EARLY_MARKER_STATE" > "$MARKER_FILE"
+fi
+
 CONTEXT=""
 
+# Polling caps must stay under CC's hook timeouts (settings.json:
+# SessionStart=5s, UserPromptSubmit=10s) — otherwise the hook gets killed
+# mid-poll and the final marker/inject never happens. Mira's project
+# repeatedly hit this: every boot-inject for the past 5 sessions was
+# cancelled, leaving zero markers and zero injected context.
 if [ "$EVENT" = "SessionStart" ] && [ ! -f "$BOOT_CTX" ] && replay_running; then
-  # Short poll (up to 10s) so a replay that's seconds from finishing still
-  # lands in the SessionStart injection instead of deferring to the
-  # UserPromptSubmit fallback. Early-exits the moment the file appears or
-  # the replay process dies.
+  # Capped at 4s to fit comfortably under the 5s SessionStart timeout.
   i=0
-  while [ "$i" -lt 10 ]; do
+  while [ "$i" -lt 4 ]; do
     sleep 1
     i=$((i + 1))
     if [ -f "$BOOT_CTX" ]; then
@@ -69,14 +108,12 @@ if [ "$EVENT" = "SessionStart" ] && [ ! -f "$BOOT_CTX" ] && replay_running; then
 fi
 
 if [ "$EVENT" = "UserPromptSubmit" ] && [ ! -f "$BOOT_CTX" ] && replay_running; then
-  # Poll up to 60s for replay to finish. Replay is a Claude agent and
-  # routinely takes 20-40s; a short window meant the first prompt often
-  # raced past a still-running replay and lost the boot context injection
-  # (the archive in sessions.log.md survives, but in-conversation context
-  # does not). Early-exit the loop as soon as the file appears or the
-  # replay process dies, so the 60s is a ceiling, not a floor.
+  # Capped at 9s to fit under the 10s UserPromptSubmit timeout. If replay
+  # exceeds this window (large project, slow replay agent), the marker
+  # stays "pending" and the next UserPromptSubmit retries — the loop
+  # iterates per-prompt rather than blocking one prompt for minutes.
   i=0
-  while [ "$i" -lt 60 ]; do
+  while [ "$i" -lt 9 ]; do
     sleep 1
     i=$((i + 1))
     if [ -f "$BOOT_CTX" ]; then

@@ -18,15 +18,15 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
-# Skip index / archive / pending / sessions artifacts — not memories.
+# Skip index / pending / sessions artifacts — not memories.
 BASENAME=$(basename "$FILE_PATH")
 case "$BASENAME" in
   MEMORY.md|SESSIONS.md|sessions.log.md|PENDING_MEMORIES.md|SCHEMA.md) exit 0 ;;
 esac
-# Skip archived memories and anything under archive/
-case "$FILE_PATH" in
-  *"/memory/archive/"*) exit 0 ;;
-esac
+# Reads under .../memory/archive/ now DO bump recall — update-recall.mjs
+# routes archived hits through a promotion check (see SCHEMA.md
+# "Auto-promote on recall threshold") and atomically moves the file
+# back to active when its post-archive recall_count clears the bar.
 
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

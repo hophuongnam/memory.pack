@@ -3,3 +3,5 @@ hooks/.boot-context-*.tmp
 hooks/.boot-marker-*
 hooks/.replay-pid-*
 hooks/.replay-error-*
+index/search.db
+index/search.db-*
