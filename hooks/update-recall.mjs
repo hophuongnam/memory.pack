@@ -58,16 +58,31 @@ const rest = body.slice(end + 5);
 
 const today = new Date().toISOString().slice(0, 10);
 
-// Parse simple `key: value` lines. Memory frontmatter is flat YAML — no nesting.
+// Parse `key: value` lines. The canonical contract (SCHEMA.md) is flat YAML,
+// but the stock system prompt's `# auto memory` block teaches a nested
+// `metadata: { type, ... }` shape that authors sometimes write. Accept leading
+// whitespace and flatten on read — pulling indented children up to top-level —
+// so the next write normalizes the file to the canonical form. The Python
+// indexer (`index-memories.py:73-79`) already does this implicitly via
+// `k.strip()`; matching that behavior here closes the drift where the recall
+// hook silently dropped indented keys (notably `type`) on rewrite.
 const lines = fmBlock.split('\n');
 const keys = new Map();
 const order = [];
 for (const line of lines) {
-  const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+  const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
   if (m) {
     keys.set(m[1], m[2]);
     if (!order.includes(m[1])) order.push(m[1]);
   }
+}
+// Drop stray `metadata:` wrapper key if its value is empty and we captured
+// children that were nested under it. Without this, the rewrite would emit
+// `metadata: ` as a dangling empty key.
+if (keys.has('metadata') && keys.get('metadata') === '' && order.length > 1) {
+  keys.delete('metadata');
+  const idx = order.indexOf('metadata');
+  if (idx >= 0) order.splice(idx, 1);
 }
 
 const prevCount = parseInt(keys.get('recall_count') || '0', 10) || 0;

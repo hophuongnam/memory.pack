@@ -4,7 +4,9 @@ This file defines the contract for the **per-project auto-memory stores** that l
 
 It is not itself a memory. It has no frontmatter and is not indexed by any `MEMORY.md`. It exists so the typing rules that govern memory writes are visible and user-editable, rather than buried only in the system prompt.
 
-If this file disagrees with the system prompt's `# auto memory` block, **the system prompt wins** — but flag the drift so one or the other gets updated. See the Evolution section at the bottom.
+If this file disagrees with the system prompt's `# auto memory` block, **this file wins for local tooling.** The Memory.Pack indexer (`index/index-memories.py`) and hooks (`hooks/update-recall.mjs`, etc.) read frontmatter using the shapes documented here.
+
+The stock system prompt's `metadata: { type: ... }` nested wrapper is **handled but non-canonical**: both `index-memories.py:73-79` (via `k.strip()`) and `update-recall.mjs:65-79` (via leading-whitespace tolerance + `metadata:` empty-wrapper drop, fixed 2026-05-13) accept indented children as top-level keys. On any Read after the fix, the recall hook rewrites the file into canonical flat form, so nested-form writes are self-healing on first recall. **Always write the flat form documented here** anyway — relying on the auto-flatten is brittle and depends on the recall hook running before any downstream tool reads the file. Flag drift in conversation so a coordinated update can happen.
 
 ## File layout (per project)
 
@@ -30,6 +32,8 @@ description: {{one-line relevance hook — used by future sessions to decide whe
 type: {{user | feedback | project | reference}}
 ---
 ```
+
+**⚠ `type` MUST be a top-level key.** The stock Claude Code system prompt's `# auto memory` block shows a nested `metadata: { type }` shape, but the canonical form is flat. As of 2026-05-13 both parsers tolerate the nested shape — `index-memories.py:64-80` via `k.strip()` and `update-recall.mjs:65-79` via leading-whitespace + empty-wrapper drop — and the recall hook normalizes nested → flat on first Read. Still write flat: any tool that reads frontmatter before the recall hook fires (e.g. one-shot scripts) won't see the auto-flatten, and the canonical form keeps the contract single-sourced. Same applies to every other recognized field below.
 
 ### Harness-managed field
 
@@ -57,10 +61,12 @@ No other frontmatter fields are recognized. Anything beyond `name`/`description`
 Ebbinghaus-inspired retention scoring. Every memory has a computed **strength** in `(0, 1]`:
 
 ```
-strength = exp( -Δt / (half_life × (1 + ln(1 + recall_count))) )
+effective_half = max(type_half, 90)  if recall_count >= 10
+              = type_half             otherwise
+strength       = exp( -Δt / (effective_half × (1 + ln(1 + recall_count))) )
 ```
 
-where `Δt = today - max(last_recalled, last_reviewed, created)` in days, and reinforcement flattens the decay curve through the `ln(1 + recall_count)` term.
+where `Δt = today - max(last_recalled, last_reviewed, created)` in days, and reinforcement flattens the decay curve through both the `ln(1 + recall_count)` multiplier *and* the half-life floor.
 
 Half-lives by type:
 
@@ -70,11 +76,11 @@ Half-lives by type:
 | `reference` | 90 days |
 | `project` | 21 days |
 
-Thresholds used by `/memory-lint --decay`:
-- `strength < 0.3` → surface in audit as "decayed, needs review"
-- `strength < 0.1` AND no recall in 60d → propose for archive (move to `memory/archive/`, drop from `MEMORY.md`)
+**Recall-count floor (`recall_count >= 10`)**: any memory that has been recalled in 10+ distinct sessions gets a half-life floor of 90 days (the `reference` half-life). In practice this only affects `project` memories — `feedback`/`user` already exceed the floor at 180d, and `reference` already sits at it. The motivation: once a `project` memory has crossed the recall threshold many times over, it has effectively become reference material that just happens to be typed `project` because of when it was first written. Without the floor, the 21d half-life puts well-recalled project memories at the bottom of byte-cap rankings even when they're clearly load-bearing (e.g. `project_epic14d_dashboard_scope.md` with `recall_count: 59` got archived under byte-cap eviction in May 2026 despite being actively used; the floor exists to prevent this). The `ln(1+recall_count)` multiplier alone is too gentle to bridge the 21d/180d gap under byte-cap competition.
 
-Archive is a proposal, not auto-action. The lint run surfaces candidates and waits for per-item user confirmation before touching any file.
+**Strength is a surfacing signal, not an archive trigger.** `strength < 0.3` surfaces memories under the `DECAYED` section of `/memory-lint --decay` so the user can reinforce, edit, archive, or delete them — but the *primary* archive path is **byte-cap eviction (INDEX CAP)**, not a low-strength threshold. The reason: with the recall hook stamping `last_recalled` on every Read, anything you actually use never decays; the only memories that organically reach low strength are orphaned project memories no one has touched. That is a small enough class that proactive byte-cap-driven eviction (ranked by strength, applied when `MEMORY.md` approaches 150 lines) is the operative cleanup mechanism. The historical `<0.1 AND no recall in 60d` archive-proposal trigger has been removed — it essentially never fired and gave the false impression that archival was decay-driven.
+
+Archive is always a proposal, never auto-action. Whether surfaced via DECAYED or INDEX CAP, the lint run waits for per-item user confirmation before touching any file.
 
 ## Auto-resurrect on slug collision
 
@@ -195,8 +201,9 @@ Rationale: reduces duplication, surfaces related memories when one is loaded, an
 ## Evolution
 
 This schema is user-editable. If you change a type's meaning or add a new field, also update:
-1. The system prompt's `# auto memory` block (authoritative — keep the schema here in sync with it)
+1. The Memory.Pack tooling — `index/index-memories.py` and `hooks/update-recall.mjs` — so the indexer and recall hook actually read the new shape (these are the runtime authority for what counts as a valid memory)
 2. `/memory-lint`'s `SKILL.md` at `~/.claude/skills/memory-lint/SKILL.md` (if the change affects what counts as drift)
 3. Any existing memory files across projects that violate the new contract
+4. The stock system prompt's `# auto memory` block, if you have a way to influence it — though in practice that block ships from Anthropic and may drift independently; treat it as advisory, not authoritative
 
-When the system prompt and this file disagree, the system prompt wins at runtime. But a disagreement is a bug in one of them — resolve it rather than letting drift accumulate.
+When the stock system prompt and this file disagree, **this file wins** for any tooling under `Memory.Pack/`. The system prompt's `# auto memory` block is generic Claude Code default guidance; it does not know about this user's custom indexer/hooks. Verified 2026-05-13: Voxtide memories written in the system prompt's nested `metadata: { type }` form were silently misindexed (empty `type` field in the FTS5 store) because `update-recall.mjs`'s regex required a letter at column 0, rejecting indented children — and on first Read it rewrote the file *without* the indented `type` line, permanently dropping the field. Patched 2026-05-13 (Mira-feedback session): the regex now accepts leading whitespace and the rewrite drops a stray empty `metadata:` wrapper, so both parsers handle the nested shape and the recall hook normalizes it to flat on first Read.
