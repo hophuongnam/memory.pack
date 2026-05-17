@@ -1,0 +1,16 @@
+{
+  "_comment": "Canonical Memory.Pack hook registrations. install.sh merges these into ~/.claude/settings.json, rewriting command to $MEMORY_PACK_HOME/hooks/<script>. 'script' doubles as the ownership key for idempotent strip + uninstall. Captured from the reference install 2026-05-18.",
+  "entries": [
+    { "event": "SessionStart",                          "script": "boot-inject.sh",            "timeout": 5  },
+    { "event": "UserPromptSubmit",                       "script": "boot-inject.sh",            "timeout": 10 },
+    { "event": "UserPromptSubmit",                       "script": "memory-search-inject.sh",   "timeout": 5  },
+    { "event": "PostToolUse",      "matcher": "Read",    "script": "memory-recall.sh",          "timeout": 3  },
+    { "event": "PostToolUse",      "matcher": "Write",   "script": "archive-resurrect.sh",      "timeout": 3  },
+    { "event": "PostToolUse",      "matcher": "Write",   "script": "memory-index-update.sh",    "timeout": 3  },
+    { "event": "PostToolUse",      "matcher": "Edit",    "script": "memory-index-update.sh",    "timeout": 3  },
+    { "event": "PostToolUse",      "matcher": "MultiEdit","script": "memory-index-update.sh",   "timeout": 3  },
+    { "event": "SessionEnd",                             "script": "session-end.sh",            "timeout": 5  },
+    { "event": "SessionEnd",                             "script": "memory-index-reconcile.sh", "timeout": 5  },
+    { "event": "Stop",                                   "script": "auto-save-stop.sh",         "timeout": 30 }
+  ]
+}

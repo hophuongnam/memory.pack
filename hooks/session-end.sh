@@ -3,6 +3,7 @@
 # Replay runs detached via nohup; boot context written to .boot-context
 # for the boot-inject hook to inject on the next session's first turn.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/_lib.sh" || { echo "memory-pack: cannot source $SCRIPT_DIR/_lib.sh" >&2; exit 1; }
 
 INPUT=$(cat)
 # Field-name aliases: CC's published hook docs say snake_case but the
@@ -25,7 +26,7 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 # Scope boot context + pid file per-project so project A's replay can't leak
 # into project B's next session.
 PROJECT_KEY="${PROJECT_DIR:-${CWD:-$PWD}}"
-PROJECT_HASH=$(printf '%s' "$PROJECT_KEY" | md5 | head -c 8)
+PROJECT_HASH=$(printf '%s' "$PROJECT_KEY" | _mp_hash)
 PROJECT_NAME=$(basename "$PROJECT_KEY" 2>/dev/null)
 [ -z "$PROJECT_NAME" ] && PROJECT_NAME="unknown"
 BOOT_CTX="$SCRIPT_DIR/.boot-context-${PROJECT_HASH}"

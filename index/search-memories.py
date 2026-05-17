@@ -28,12 +28,16 @@ Tips for callers:
 
 import argparse
 import json
+import os
 import pathlib
 import sqlite3
 import sys
 
+_MPH = os.environ.get("MEMORY_PACK_HOME")
 DB_PATH = (
-    pathlib.Path.home() / "Resilio.Sync" / "Memory.Pack" / "index" / "search.db"
+    (pathlib.Path(_MPH) if _MPH else pathlib.Path.home() / ".memory-pack")
+    / "index"
+    / "search.db"
 )
 
 

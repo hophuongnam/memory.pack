@@ -10,9 +10,13 @@
 //      ~/.claude/projects/<slug>/memory/PENDING_MEMORIES.md for human-in-the-
 //      loop review by a future session.
 
-import { getSessionMessages, query } from '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
+import { resolveSdkSpecifier } from './_lib.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+
+// SDK location is host-dependent (Homebrew on macOS, npm-global or
+// engine-local on Linux). Resolve portably instead of hardcoding a path.
+const { getSessionMessages, query } = await import(resolveSdkSpecifier());
 
 // Exit codes:
 //   0 = success (boot context written to stdout)
@@ -30,6 +34,13 @@ const bail = (code, reason) => {
 const sessionId = process.argv[2];
 const cwd = process.argv[3] || process.cwd();
 const project = cwd.split('/').pop();
+
+// Engine root is relocatable; prefer the explicit knob, else self-locate
+// (this file physically lives in <root>/hooks/). Keeps the schema pointer
+// shown to the promotion agent correct on any host.
+const ENGINE_ROOT = process.env.MEMORY_PACK_HOME
+  || path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const SCHEMA_PATH = path.join(ENGINE_ROOT, 'SCHEMA.md');
 
 if (!sessionId) {
   bail(2, 'no session id passed on argv — nothing to replay');
@@ -200,7 +211,7 @@ Propose a memory ONLY if the transcript contains a fact that meets ALL of:
 
 PREFER SILENCE. A missed memory is fine; a noisy memory is costly. When in doubt, emit NONE.
 
-Valid types (canonical semantics: ~/Resilio.Sync/Memory.Pack/SCHEMA.md):
+Valid types (canonical semantics: ${SCHEMA_PATH}):
 - user      — durable attributes of the user (role, expertise, responsibilities)
 - feedback  — corrections OR confirmed non-obvious approaches
 - project   — who/why/when of ongoing work (convert relative dates to absolute; today is ${today})
@@ -282,7 +293,7 @@ When you see this file in a session:
 3. For each proposal, choose ONE:
    - **Create** a new memory file using the proposed type/name/body.
      Verify against the canonical schema at
-     \`~/Resilio.Sync/Memory.Pack/SCHEMA.md\` and add a pointer line to
+     \`${SCHEMA_PATH}\` and add a pointer line to
      \`MEMORY.md\` in the right section.
    - **Merge** into an existing memory on the same topic.
    - **Discard** (noise, ephemeral, already known, or no longer true).

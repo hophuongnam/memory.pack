@@ -4,7 +4,7 @@ Incrementally sync auto-memory files into a SQLite FTS5 index.
 
 Walks ~/.claude/projects/<slug>/memory/**/*.md (active and archive/),
 parses YAML-ish frontmatter, and upserts into
-~/Resilio.Sync/Memory.Pack/index/search.db.
+$MEMORY_PACK_HOME/index/search.db (default ~/.memory-pack/).
 
 Usage:
   index-memories.py                # incremental sync (default)
@@ -24,7 +24,11 @@ import sys
 
 HOME = pathlib.Path.home()
 PROJECTS_ROOT = HOME / ".claude" / "projects"
-DB_PATH = HOME / "Resilio.Sync" / "Memory.Pack" / "index" / "search.db"
+# Engine root is relocatable: $MEMORY_PACK_HOME if set (the installer sets
+# it; on the original Mac it points at ~/Resilio.Sync/Memory.Pack so this
+# path is unchanged), else ~/.memory-pack.
+_MPH = os.environ.get("MEMORY_PACK_HOME")
+DB_PATH = (pathlib.Path(_MPH) if _MPH else HOME / ".memory-pack") / "index" / "search.db"
 
 SKIP_BASENAMES = {
     "MEMORY.md",
