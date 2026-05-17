@@ -175,7 +175,12 @@ IHEADER
       printf '%s  ·  %s  ·  %s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "${SESSION_ID:-unknown}" "$TITLE_LINE" >> "$SESSIONS_INDEX"
     fi
   fi
-  rm -f "$BOOT_CTX"
+  # Snapshot the consumed boot context so session-end.sh can carry it
+  # forward when this session's replay is skipped (user opt-out OR trivial
+  # session auto-skip). Without this snapshot every skipped session breaks
+  # the memory chain: the session AFTER the skip loads as "No boot
+  # context available" because session-end's skip path writes nothing.
+  mv -f "$BOOT_CTX" "$SCRIPT_DIR/.boot-context-last-${PROJECT_HASH}"
   STATUS="[Boot context loaded from previous session.]"
   MARKER_STATE="loaded"
 elif replay_running; then
@@ -202,6 +207,24 @@ if [ -n "$CONTEXT" ]; then
 $CONTEXT"
 else
   CONTEXT="$STATUS"
+fi
+
+# Skip-replay protocol — static operational glue, prepended only on
+# SessionStart. Tells the assistant how to honor "skip replay" requests
+# by writing a one-shot sentinel that session-end.sh consumes. Kept out
+# of MEMORY.md by design (operational, not user-curated content).
+# Lost-on-timeout case is narrow: only when BOOT_CTX absent AND replay
+# running AND polling exceeds 4s — marker stays "pending" so the next
+# UserPromptSubmit re-fires this hook and recovers.
+if [ "$EVENT" = "SessionStart" ]; then
+  CONTEXT="## Skip-replay protocol
+Sentinel: $SCRIPT_DIR/.skip-replay-${PROJECT_HASH} (one-shot, consumed by session-end.sh)
+Trigger phrases: \"skip replay\", \"don't replay this session\", \"no replay\"
+Action: touch the sentinel
+Effect: replay is skipped, but the next session still inherits THIS session's boot context (carry-forward) — no amnesia.
+Undo: rm the sentinel
+
+$CONTEXT"
 fi
 
 # Independent reminder: if pending memory proposals exist for this project

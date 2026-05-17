@@ -32,12 +32,54 @@ BOOT_CTX="$SCRIPT_DIR/.boot-context-${PROJECT_HASH}"
 PID_FILE="$SCRIPT_DIR/.replay-pid-${PROJECT_HASH}"
 ERR_MARKER="$SCRIPT_DIR/.replay-error-${PROJECT_HASH}"
 
-# Skip trivial sessions (≤5 user turns)
+# Carry-forward: when this session's replay is skipped — either by the
+# user opt-out sentinel or the trivial-session auto-skip below — the next
+# session would otherwise load as "No boot context available" because
+# boot-inject.sh already consumed this session's incoming boot context at
+# startup and nothing replaces it. That silently breaks the memory chain
+# at every skip. boot-inject.sh snapshots each consumed boot context to
+# .boot-context-last-${PROJECT_HASH}; resurrect it here (with a header
+# marking it as carried over) so continuity survives the skip.
+carry_forward() {
+  reason="$1"
+  # Never clobber a fresh boot context (would only exist if boot-inject
+  # failed to consume it this session — leave it for the next session).
+  [ -f "$BOOT_CTX" ] && return 0
+  LAST_BOOT="$SCRIPT_DIR/.boot-context-last-${PROJECT_HASH}"
+  [ -f "$LAST_BOOT" ] || return 0
+  # Strip a prior carry-forward header (+ its blank line) before
+  # re-wrapping, so a run of consecutive skips keeps exactly one header
+  # instead of stacking them unboundedly.
+  {
+    printf '[Carry-forward: %s. The summary below is from a prior session, not the one that just ended.]\n\n' "$reason"
+    awk 'NR==1 && /^\[Carry-forward:/ {h=1; next} NR==2 && h && /^$/ {next} {print}' "$LAST_BOOT"
+  } > "$BOOT_CTX"
+}
+
+# Skip-replay opt-out: one-shot sentinel set during the session when the
+# user asked to skip this session's replay. See boot-inject.sh's static
+# "Skip-replay protocol" block for the trigger phrases and consumption
+# contract. Consumed here (rm) so the next session replays normally
+# unless the user opts out again.
+SKIP_SENTINEL="$SCRIPT_DIR/.skip-replay-${PROJECT_HASH}"
+if [ -f "$SKIP_SENTINEL" ]; then
+  rm -f "$SKIP_SENTINEL"
+  carry_forward "replay skipped by user request"
+  osascript -e "display notification \"Replay skipped\" with title \"Claude Code · $PROJECT_NAME\"" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# Skip trivial sessions (≤5 user turns), but still carry the prior boot
+# context forward so the next real session isn't amnesiac about the last
+# meaningful one.
 TURNS=0
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   TURNS=$(grep -c '"type":"user"' "$TRANSCRIPT" 2>/dev/null || echo 0)
 fi
-[ "$TURNS" -le 5 ] && exit 0
+if [ "$TURNS" -le 5 ]; then
+  carry_forward "session had $TURNS user turn(s) — too short to replay"
+  exit 0
+fi
 
 # Resolve replay script location (follow symlinks to find co-located replay.mjs)
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
