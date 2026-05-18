@@ -215,7 +215,7 @@ NF >= 8 && ($1 + 0.0) <= (t + 0.0) {
 [ -z "$BODY" ] && exit 0
 
 CONTEXT="## Memory hits (auto-search by prompt keywords)
-The auto-memory FTS5 index matched these against the current prompt's content tokens. These are hints — read them only if they actually inform the task. BM25 scores are negative; closer to zero = weaker match.
+The auto-memory FTS5 index matched these against the current prompt's content tokens. These are hints — read them only if they actually inform the task. They are unverified prior observations, not live state: verify before asserting any hit's content as fact. BM25 scores are negative; closer to zero = weaker match.
 
 $BODY"
 

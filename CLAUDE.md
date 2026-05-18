@@ -108,7 +108,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-8 suites in `tests/` — run all before any commit:
+9 suites in `tests/` — run all before any commit:
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -122,7 +122,11 @@ runtime-state-excluded), `test_hooks_wired`, `test_install`,
 `test_recall_frontmatter_preserve` (recall hook must NOT reshape
 frontmatter — runs the real `update-recall.mjs` + real Python
 `parse_frontmatter` against flat/nested/`node_type` fixtures; guards the
-silent-amnesia class). Two accepted patterns for the side-effecting
+silent-amnesia class), `test_inject_preamble_epistemic` (the
+memory-hint inject preamble must carry the verify-before-asserting
+epistemic clause, not just the relevance gate — structural-source pin
+for the *read-side* analog of the silent-amnesia class). Two accepted
+patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
 (exclude comment lines AND runtime-state dotfiles), assert the portable
