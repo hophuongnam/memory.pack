@@ -13,6 +13,8 @@
 import { resolveSdkSpecifier } from './_lib.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 // SDK location is host-dependent (Homebrew on macOS, npm-global or
 // engine-local on Linux). Resolve portably instead of hardcoding a path.
@@ -33,13 +35,13 @@ const bail = (code, reason) => {
 
 const sessionId = process.argv[2];
 const cwd = process.argv[3] || process.cwd();
-const project = cwd.split('/').pop();
+const project = path.basename(cwd);
 
 // Engine root is relocatable; prefer the explicit knob, else self-locate
 // (this file physically lives in <root>/hooks/). Keeps the schema pointer
 // shown to the promotion agent correct on any host.
 const ENGINE_ROOT = process.env.MEMORY_PACK_HOME
-  || path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+  || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEMA_PATH = path.join(ENGINE_ROOT, 'SCHEMA.md');
 
 if (!sessionId) {
@@ -78,8 +80,14 @@ if (!transcript.trim()) {
 // across prior sessions (e.g. "this is the 3rd session on the auth
 // rewrite"). SESSIONS.md is maintained by boot-inject.sh.
 // ───────────────────────────────────────────────────────────────────────
-const slug = cwd.replace(/[/.]/g, '-');
-const memoryDir = path.join(process.env.HOME, '.claude', 'projects', slug, 'memory');
+// Mirrors Claude Code's project-dir slug: abs cwd with `/` and `.` -> `-`.
+// The `\\` in the class is a POSIX-byte-identical superset (POSIX paths
+// contain no backslash) that also collapses Windows separators; CC's exact
+// native-Windows slug encoding is unverified, so full native parity is a
+// documented boundary, not a claim. os.homedir() replaces process.env.HOME
+// (unset on Windows; identical to $HOME on POSIX).
+const slug = cwd.replace(/[\\/.]/g, '-');
+const memoryDir = path.join(os.homedir(), '.claude', 'projects', slug, 'memory');
 
 let memoryDirExists = false;
 try { await fs.access(memoryDir); memoryDirExists = true; } catch {}

@@ -1,64 +1,130 @@
-# Memory Pack
+# Memory.Pack — engine dev/maintenance guide
 
-Session continuity + auto-save tooling for Claude Code. Wired globally from
-`~/.claude/settings.json` — the hooks in `hooks/` are called by absolute path,
-not symlinked into each project.
+Session-continuity + auto-memory engine for Claude Code. Git repo
+(`github.com/hophuongnam/memory.pack`, branch `main`), wired globally from
+`~/.claude/settings.json` — hooks run by **absolute path**, never symlinked
+per-project. `hooks/` is the single source of truth.
 
-## Active hooks
+## Working style (this project)
 
-| Event              | Script              | Purpose                                                      |
-|--------------------|---------------------|--------------------------------------------------------------|
-| `Stop`             | `auto-save-stop.sh` | Every 30 user turns, block and tell Claude to save memory    |
-| `SessionEnd`       | `session-end.sh`    | Detach `replay.mjs` via nohup; it writes next boot context   |
-| `SessionStart`     | `boot-inject.sh`    | Inject previous session's boot context via `additionalContext` |
-| `UserPromptSubmit` | `boot-inject.sh`    | Fallback inject; polls up to 5s if replay still running      |
+- Radical candor. Don't flatter. Tell me what I need to hear, including when
+  a design is wrong or a "fix" is actually a regression.
+- Research-first, then surgical edits. Read the actual code/`SCHEMA.md`
+  before changing behavior — never reason from assumptions.
+- **TDD is non-negotiable here.** Every change (feature or bugfix):
+  failing test first → watch it fail for the right reason → minimal GREEN.
+  The engine's failure mode is *silent amnesia* — a regression is invisible
+  until a future session boots empty, so tests are the only safety net.
+- This project has its own auto-memory store
+  (`~/.claude/projects/-Users-namhp-Resilio-Sync-Memory-Pack/memory/`).
+  Engine architecture + lessons live there (`project_memory_pack_engine.md`
+  + `feedback_*`/`reference_*`). Read `SCHEMA.md` for the memory contract.
 
-## Flow
+## Architecture
+
+**11 hook registrations** (canonical list: `install/hooks.manifest.json`):
+`SessionStart`→boot-inject; `UserPromptSubmit`→boot-inject + memory-search-inject;
+`SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop;
+`PostToolUse` Read→memory-recall, Write→archive-resurrect + memory-index-update,
+Edit/MultiEdit→memory-index-update.
+
+**Two-pass replay** (`hooks/replay.mjs`, detached by `session-end.sh` via
+`nohup`/`disown`; model `claude-sonnet-4-6`, `maxTurns:6`, `tools:[]`):
+pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
+to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
+promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —
+runs detached without read access to memory bodies). Exit codes: 0 ok,
+2 benign no-op, 3 real failure (session-end synthesizes a self-reporting
+"Replay failed" boot-context).
+
+**Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
+`SAVE_INTERVAL=50` user turns → Claude writes bodies. (b) `boot-inject.sh`
+writes `sessions.log.md`/`SESSIONS.md`. (c) `replay.mjs` pass 2 writes
+`PENDING_MEMORIES.md`. (d) `memory-recall.sh`→`update-recall.mjs` edits
+*frontmatter only* (recall_count/last_recalled), session-deduped, and
+auto-promotes archived→active at `recall_count>=3`. The CC harness
+auto-stamps `originSessionId` on every memory Write/Edit — legitimate,
+never strip it.
+
+**FTS5 search** (`index/`): `index-memories.py` walks all
+`~/.claude/projects/*/memory/**/*.md` → SQLite `search.db` (gitignored,
+derived, rebuilt at install — never packaged). `search-memories.py` =
+BM25 CLI behind the `memory-search` skill. `memory-search-inject.sh`
+auto-injects ≤3 prompt-relevant hits per UserPromptSubmit (bash+jq+sqlite3,
+~30ms; threshold + coverage filtered). Index is cross-project by design.
+
+**`SCHEMA.md`** (repo root) is THE canonical memory contract for every
+project store — types, frontmatter, decay model. No per-project copy.
+
+## Invariants that MUST NOT regress (silent-amnesia class)
+
+1. **`_mp_hash` value-preservation** (`hooks/_lib.sh`). Order
+   `md5sum→md5→python3→loud-fail` is a *latency* choice only; the value is
+   byte-identical across every branch (MD5 is MD5) and equals the live
+   on-disk sentinels (e.g. project key `…/Management` → `3bfed408`). Never
+   value-depend on which tool ran; never collapse the shim (bare
+   `md5|head -c8` produced an empty `PROJECT_HASH` on Linux → silent
+   boot-context amnesia — the reason this exists); never reorder so python3
+   precedes md5sum/md5 (it sits on boot-inject's pre-marker race path).
+2. **statusline parity.** `Management/statusline-command.sh`'s
+   `mp_proj_hash` must stay value-equal to `_mp_hash` or `⏭skip-replay`
+   targets the wrong sentinel. (Lives in the sibling Management project.)
+3. **snake↔camel hook stdin.** Every hook parsing CC stdin must accept
+   both `session_id`/`sessionId`, `hook_event_name`/`hookEventName`, etc.,
+   or marker/boot-context writes silently no-op across CC releases.
+4. **Project slug** must mirror CC's `~/.claude/projects/<slug>` naming
+   (abs cwd, `/`+`.`→`-`) identically in `boot-inject.sh`, `replay.mjs`,
+   and `index-memories.py`, or memories mis-file.
+5. **Runtime state is never packaged.** `.boot-context-*`, `.boot-marker-*`,
+   `.replay-*`, `.skip-replay-*`, `search.db` are derived/ephemeral
+   (`.gitignore` + `install.sh` EXCL + the test scan must all agree).
+
+## Portability
+
+Engine root relocatable: `MEMORY_SEARCH_DB` > `$MEMORY_PACK_HOME` >
+`~/.memory-pack` (honored by `index/*.py` + `memory-search-inject.sh`;
+SCHEMA pointers resolve, not literal). `hooks/_lib.mjs`
+`resolveSdkSpecifier` resolves the agent SDK portably (env > MPH-local >
+unix globals > Windows `%APPDATA%\npm` > bare; degrades gracefully).
+Install on any host: `git clone … && ./install.sh` (idempotent,
+null-command-safe settings.json merge; `--uninstall`/`--check`;
+`--with-sdk`). **Windows = WSL2** (engine runs unchanged). A native
+PowerShell port was analyzed and **deliberately declined** (permanent
+dual-maintenance, negative-EV, reinvites silent amnesia). Native-only
+boundary documented at `tests/test_path_portability.mjs:1` — do NOT "fix"
+the POSIX-correct `/memory/archive/` string ops, `python3`-vs-`python`,
+or slug encoding for native without revisiting that decision.
+
+## Tests
+
+7 suites in `tests/` — run all before any commit:
 
 ```
-Session N ends
-  └─ session-end.sh
-       ├─ skip if ≤5 user turns
-       └─ nohup node replay.mjs <session-id> <cwd>
-             ├─ getSessionMessages() via @anthropic-ai/claude-agent-sdk
-             ├─ Sonnet 4.6, maxTurns:1 → TITLE / SUMMARY / TODO / DECISIONS
-             └─ stdout → .boot-context-<hash>.tmp → atomic mv
-
-Session N+1 starts (same project)
-  └─ boot-inject.sh (SessionStart, then UserPromptSubmit)
-       ├─ hash cwd → read .boot-context-<hash>
-       ├─ if replay still running: poll up to 5s
-       └─ emit hookSpecificOutput.additionalContext
+for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
+for t in tests/test_*.mjs; do node "$t"  || echo "FAIL $t"; done
 ```
 
-## Per-project scoping
+`test_hash_shim` (value-preservation + python3 + loud-fail + statusline
+parity), `test_mph_resolution` (MEMORY_PACK_HOME + no-hardcoded-path,
+runtime-state-excluded), `test_hooks_wired`, `test_install`,
+`test_settings_merge`, `test_sdk_resolve`, `test_path_portability`.
+The side-effecting `.mjs`/`.sh` scripts can't be unit-imported — the
+accepted pattern (`test_sdk_resolve.mjs:62` idiom) is **structural
+source-regression tests**: scan code-only (exclude comment lines AND
+runtime-state dotfiles), assert the portable form is present and the
+POSIX-only form is absent. For value-critical assertions add a mutation
+check (corrupt → watch the test fail on value → revert).
 
-Boot context and replay PID files live in `hooks/` and are keyed by a short
-md5 of the hook input's `cwd`:
+## Gotchas
 
-- `.boot-context-<hash>` — the pending boot summary
-- `.replay-pid-<hash>` — PID of the running replay, used by the inject hook to
-  decide whether to poll
-
-Without the hash, project A's replay output would leak into project B's next
-session. Both hooks must compute the hash the same way (`printf '%s' "$CWD" |
-md5 | head -c 8`).
-
-## Dependencies
-
-- `@anthropic-ai/claude-agent-sdk` installed globally at
-  `/opt/homebrew/lib/node_modules/` — `replay.mjs` imports `sdk.mjs` directly.
-- `jq` — hook input parsing.
-- `python3` — `auto-save-stop.sh` uses it to parse the JSONL transcript.
-
-## auto-save-stop.sh
-
-Counts user messages in the transcript, skipping `<command-message>` entries.
-Every `SAVE_INTERVAL` (30) it returns `{"decision":"block", "reason":"..."}`
-with instructions to write to `~/.claude/projects/*/memory/`. The `stop_hook_active`
-guard prevents infinite loops — once Claude saves and tries to stop again, the
-hook lets it through. State lives in `$HOME/.claude/hook_state/`:
-
-- `<session-id>_last_save` — last exchange count at which a save fired
-- `hook.log` — rolling log of exchanges seen
-
+- The `Bash` tool runs under **zsh**: unquoted `$var` does NOT word-split
+  (bash-ism). Use explicit literal lists or arrays in loops.
+- Editing a memory file you just `Read` races `update-recall.mjs`
+  (frontmatter bump). Edit memory files via Bash+Python fresh-read +
+  atomic `os.replace`, never the Edit tool — see
+  `feedback_memory_edit_recall_race.md` in the project memory store.
+- BSD (macOS) vs GNU sed/`md5sum` differ; macOS ships `md5`, Linux
+  `md5sum`. Prefer `awk`/`python3` over sed quantifier tricks.
+- `os.replace`/`mv` do NOT fire the PostToolUse indexer hook — run
+  `index/index-memories.py` (incremental) after out-of-band file moves,
+  or let SessionEnd `memory-index-reconcile.sh` catch it.

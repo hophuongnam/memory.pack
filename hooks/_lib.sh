@@ -5,26 +5,37 @@
 
 # _mp_hash: read stdin, print the first 8 hex chars of its MD5 digest.
 #
-# Value-preserving, portable replacement for the legacy expression
+# Value-preserving, OS-independent replacement for the legacy expression
 #   printf '%s' "$KEY" | md5 | head -c 8
 # macOS `md5` prints the digest alone ("<hex>\n"); GNU `md5sum` prints
-# "<hex>  -\n". `head -c 8` yields the same first 8 hex chars from either,
-# and MD5 is tool-independent, so the derived PROJECT_HASH is byte-identical
-# across the macOS/Linux split — existing .boot-context-<hash> and
-# .skip-replay-<hash> sentinels (and the independent statusline derivation)
-# stay valid after the swap.
+# "<hex>  -\n"; python3's hexdigest()[:8] prints the 8 hex chars alone.
+# All three yield the SAME first 8 hex chars (MD5 is tool-independent), so
+# the derived PROJECT_HASH is byte-identical across macOS / Linux / Windows
+# — existing .boot-context-<hash> and .skip-replay-<hash> sentinels stay
+# valid, and statusline-command.sh's independent derivation keeps matching.
 #
-# Fails LOUD (stderr + return 1) when no MD5 tool exists rather than
-# emitting an empty hash: a silent empty PROJECT_HASH would mis-scope every
-# boot-context/sentinel filename, which is exactly the silent-amnesia class
+# Branch ORDER is a latency choice, NOT a value choice (the hash is
+# identical whichever tool computes it): md5sum/md5 are ~2ms and run first
+# because _mp_hash sits on boot-inject.sh's pre-marker critical path, which
+# was hand-tuned to beat the statusline race by tens of ms. python3 is the
+# universal fallback (a hard install dependency; the ONLY hash tool on a
+# bare Windows host, where neither md5sum nor md5 exists) and pays its
+# ~50ms cold start only when no fast tool is present. statusline uses the
+# same md5sum→md5→python3 ordering so the two derivations never diverge.
+#
+# Still fails LOUD (stderr + return 1) when NONE of the three exist rather
+# than emitting an empty hash: a silent empty PROJECT_HASH would mis-scope
+# every boot-context/sentinel filename — exactly the silent-amnesia class
 # this shim exists to eliminate.
 _mp_hash() {
   if command -v md5sum >/dev/null 2>&1; then
     md5sum | head -c 8
   elif command -v md5 >/dev/null 2>&1; then
     md5 | head -c 8
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import hashlib,sys;sys.stdout.write(hashlib.md5(sys.stdin.buffer.read()).hexdigest()[:8])'
   else
-    echo "memory-pack: no md5sum or md5 binary found for PROJECT_HASH derivation" >&2
+    echo "memory-pack: no md5sum, md5, or python3 for PROJECT_HASH derivation" >&2
     return 1
   fi
 }

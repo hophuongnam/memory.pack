@@ -60,10 +60,19 @@ chk "bash  value-preserve" "$HOME/Resilio.Sync/Memory.Pack/index/search.db" \
 
 # --- invariant: no hardcoded engine path anywhere in code ---
 rm -rf "$WT/index/__pycache__" 2>/dev/null || true
-# Contract is "no engine path in EXECUTABLE code". Comment-only lines that
-# reference the legacy path for migration documentation are allowed and
-# wanted — filter `file:lineno:` rows whose content starts with # or //.
-HITS=$(grep -rnI --exclude-dir=__pycache__ 'Resilio\.Sync/Memory\.Pack' "$WT/hooks" "$WT/index" 2>/dev/null \
+# Contract is "no engine path in EXECUTABLE SOURCE". Two classes are
+# legitimately allowed and must be filtered out:
+#   1. comment-only lines (migration docs) — drop `file:lineno:` rows whose
+#      content starts with # or //.
+#   2. runtime-state artifacts — .boot-context-*/.boot-marker-*/.replay-*/
+#      .skip-replay-* are ephemeral DATA, not engine code (install.sh:92-93
+#      excludes the exact same set from the package). Their replay-summary
+#      prose can quote the project path verbatim, which says nothing about
+#      source. Mirror that EXCL list so the scan stays source-only.
+HITS=$(grep -rnI --exclude-dir=__pycache__ \
+  --exclude='.boot-context-*' --exclude='.boot-marker-*' \
+  --exclude='.replay-*' --exclude='.skip-replay-*' \
+  'Resilio\.Sync/Memory\.Pack' "$WT/hooks" "$WT/index" 2>/dev/null \
   | grep -vE ':[0-9]+:[[:space:]]*(#|//)' || true)
 if [ -z "$HITS" ]; then
   ok "no 'Resilio.Sync/Memory.Pack' literal survives in hooks/ + index/"

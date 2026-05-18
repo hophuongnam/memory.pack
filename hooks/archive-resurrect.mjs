@@ -41,7 +41,7 @@ const memDir = dirname(memoryPath);
 
 // Don't recurse into archive itself: if the path is `.../memory/archive/foo.md`,
 // there's no `<dir>/archive/archive/foo.md` to merge from. Skip.
-if (memDir.endsWith('/archive')) process.exit(0);
+if (basename(memDir) === 'archive') process.exit(0);
 
 const archivePath = join(memDir, 'archive', baseName);
 if (!existsSync(archivePath)) process.exit(0);

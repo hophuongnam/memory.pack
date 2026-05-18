@@ -11,7 +11,8 @@ const SDK_PKG = '@anthropic-ai/claude-agent-sdk/sdk.mjs';
 // does not exist on Linux. Precedence:
 //   1. $CLAUDE_AGENT_SDK explicit override (if the file exists)
 //   2. $MEMORY_PACK_HOME-local install (engine-bundled by install.sh)
-//   3. known global npm roots (macOS Homebrew, Linux /usr/local, /usr/lib)
+//   3. known global npm roots (macOS Homebrew, Linux /usr/local, /usr/lib,
+//      Windows %APPDATA%\npm)
 //   4. bare package specifier — let Node's resolver / NODE_PATH try last
 // `exists` is dependency-injected for testability (default fs.existsSync).
 export function resolveSdkSpecifier({ env = process.env, exists = existsSync } = {}) {
@@ -25,6 +26,12 @@ export function resolveSdkSpecifier({ env = process.env, exists = existsSync } =
     `/usr/local/lib/${SDK_REL}`,    // Linux npm global (common)
     `/usr/lib/${SDK_REL}`,          // Linux npm global (distro)
   );
+  // Windows npm global root. Guarded: the candidate is only formed when
+  // APPDATA is set, so on POSIX (APPDATA undefined) this is a no-op and
+  // every existing macOS/Linux resolution stays byte-identical. Lowest
+  // precedence — appended after the unix globals — so it can never
+  // subvert an existing hit. Node accepts '/' on Windows.
+  if (env.APPDATA) candidates.push(`${env.APPDATA}/npm/${SDK_REL}`);
   for (const c of candidates) if (exists(c)) return c;
 
   return SDK_PKG;

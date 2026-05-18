@@ -55,6 +55,21 @@ eq('precedence env beats all', '/ovr.mjs',
 eq('precedence MPH beats brew', MPHSDK,
    resolveSdkSpecifier({ env: { MEMORY_PACK_HOME: MPH }, exists: only(MPHSDK, BREW) }));
 
+// Windows npm-global root via %APPDATA%. Guarded so the candidate is only
+// FORMED when env.APPDATA is set -> POSIX (APPDATA undefined) is byte-
+// unaffected. Lowest precedence (after the unix globals) so no existing
+// macOS/Linux resolution can change. Node accepts '/' on Windows, so the
+// mixed-separator string the resolver builds is a valid importable path.
+const APPDATA = 'C:\\Users\\u\\AppData\\Roaming';
+const WINSDK = `${APPDATA}/npm/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs`;
+eq('windows APPDATA npm global', WINSDK,
+   resolveSdkSpecifier({ env: { APPDATA }, exists: only(WINSDK) }));
+// value-preservation: MEMORY_PACK_HOME-local must still beat the new
+// APPDATA root (adding the candidate must not subvert precedence).
+eq('precedence MPH beats APPDATA', MPHSDK,
+   resolveSdkSpecifier({ env: { MEMORY_PACK_HOME: MPH, APPDATA },
+                         exists: only(MPHSDK, WINSDK) }));
+
 // nothing exists -> bare specifier (Node resolver / NODE_PATH last resort)
 eq('nothing exists -> bare', BARE,
    resolveSdkSpecifier({ env: {}, exists: () => false }));

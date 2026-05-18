@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, closeSync, openSync, readdirSync, statSync, unlinkSync, utimesSync, appendFileSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const [, , memoryPath, sessionId] = process.argv;
 if (!memoryPath) process.exit(0);
@@ -187,7 +188,7 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
   // Re-sync the FTS5 index: delete archive entry, insert active entry.
   // Backgrounded so the recall hook returns instantly.
   try {
-    const indexer = join(dirname(new URL(import.meta.url).pathname), '..', 'index', 'index-memories.py');
+    const indexer = join(dirname(fileURLToPath(import.meta.url)), '..', 'index', 'index-memories.py');
     if (existsSync(indexer)) {
       spawn('python3', [indexer, '--file', archivePath, '--quiet'], { detached: true, stdio: 'ignore' }).unref();
       spawn('python3', [indexer, '--file', activePath, '--quiet'], { detached: true, stdio: 'ignore' }).unref();
