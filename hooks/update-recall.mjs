@@ -59,44 +59,41 @@ const rest = body.slice(end + 5);
 
 const today = new Date().toISOString().slice(0, 10);
 
-// Parse `key: value` lines. The canonical contract (SCHEMA.md) is flat YAML,
-// but the stock system prompt's `# auto memory` block teaches a nested
-// `metadata: { type, ... }` shape that authors sometimes write. Accept leading
-// whitespace and flatten on read — pulling indented children up to top-level —
-// so the next write normalizes the file to the canonical form. The Python
-// indexer (`index-memories.py:73-79`) already does this implicitly via
-// `k.strip()`; matching that behavior here closes the drift where the recall
-// hook silently dropped indented keys (notably `type`) on rewrite.
+// Read every key, leading-whitespace tolerant, so the stock system-prompt's
+// nested `metadata: { type }` shape and CC's intermittent `node_type:`
+// injection are both parsed. This map feeds the archive-promote path below
+// (description/type/recall_count); it is NOT used to re-serialize. We never
+// restructure the file — shapes are tolerated on read, never mutated (see
+// SCHEMA.md). The Python indexer (`index-memories.py`) parses the same way
+// via `k.strip()`, so `type` resolves from any shape regardless of this hook.
 const lines = fmBlock.split('\n');
 const keys = new Map();
-const order = [];
 for (const line of lines) {
   const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-  if (m) {
-    keys.set(m[1], m[2]);
-    if (!order.includes(m[1])) order.push(m[1]);
-  }
-}
-// Drop stray `metadata:` wrapper key if its value is empty and we captured
-// children that were nested under it. Without this, the rewrite would emit
-// `metadata: ` as a dangling empty key.
-if (keys.has('metadata') && keys.get('metadata') === '' && order.length > 1) {
-  keys.delete('metadata');
-  const idx = order.indexOf('metadata');
-  if (idx >= 0) order.splice(idx, 1);
+  if (m) keys.set(m[1], m[2]);
 }
 
 const prevCount = parseInt(keys.get('recall_count') || '0', 10) || 0;
 const newCount = alreadyBumpedThisSession ? prevCount : prevCount + 1;
 
-keys.set('last_recalled', today);
-keys.set('recall_count', String(newCount));
-for (const k of ['last_recalled', 'recall_count']) {
-  if (!order.includes(k)) order.push(k);
-}
+// In-place edit: rewrite ONLY the two counter lines, preserving each line's
+// existing indentation; append at column 0 if absent. Every other byte of
+// the frontmatter — key order, the `metadata:` wrapper, indentation,
+// `node_type`, blank lines — is left exactly as the author/harness wrote it.
+const setInPlace = (key, value) => {
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*.*$/);
+    if (m && m[2] === key) {
+      lines[i] = `${m[1]}${key}: ${value}`;
+      return;
+    }
+  }
+  lines.push(`${key}: ${value}`);
+};
+setInPlace('recall_count', String(newCount));
+setInPlace('last_recalled', today);
 
-const newFm = order.map((k) => `${k}: ${keys.get(k)}`).join('\n');
-const out = `---\n${newFm}\n---\n${rest}`;
+const out = `---\n${lines.join('\n')}\n---\n${rest}`;
 
 // Preserve original mtime so `/memory-lint --decay` still sees the real
 // "last substantive write" time for legacy memories that lack a `created`

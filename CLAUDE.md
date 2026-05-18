@@ -108,7 +108,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-7 suites in `tests/` — run all before any commit:
+8 suites in `tests/` — run all before any commit:
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -118,13 +118,19 @@ for t in tests/test_*.mjs; do node "$t"  || echo "FAIL $t"; done
 `test_hash_shim` (value-preservation + python3 + loud-fail + statusline
 parity), `test_mph_resolution` (MEMORY_PACK_HOME + no-hardcoded-path,
 runtime-state-excluded), `test_hooks_wired`, `test_install`,
-`test_settings_merge`, `test_sdk_resolve`, `test_path_portability`.
-The side-effecting `.mjs`/`.sh` scripts can't be unit-imported — the
-accepted pattern (`test_sdk_resolve.mjs:62` idiom) is **structural
-source-regression tests**: scan code-only (exclude comment lines AND
-runtime-state dotfiles), assert the portable form is present and the
-POSIX-only form is absent. For value-critical assertions add a mutation
-check (corrupt → watch the test fail on value → revert).
+`test_settings_merge`, `test_sdk_resolve`, `test_path_portability`,
+`test_recall_frontmatter_preserve` (recall hook must NOT reshape
+frontmatter — runs the real `update-recall.mjs` + real Python
+`parse_frontmatter` against flat/nested/`node_type` fixtures; guards the
+silent-amnesia class). Two accepted patterns for the side-effecting
+`.mjs`/`.sh` scripts (they can't be unit-imported): **structural
+source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
+(exclude comment lines AND runtime-state dotfiles), assert the portable
+form present / POSIX-only form absent; or **behavioral subprocess**
+(`test_install.sh` / `test_recall_frontmatter_preserve.mjs` idiom) — run
+the real script against temp fixtures and assert observable output. For
+value-critical assertions add a mutation check (corrupt → watch the test
+fail on value → revert).
 
 ## Gotchas
 

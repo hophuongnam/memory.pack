@@ -6,7 +6,7 @@ It is not itself a memory. It has no frontmatter and is not indexed by any `MEMO
 
 If this file disagrees with the system prompt's `# auto memory` block, **this file wins for local tooling.** The Memory.Pack indexer (`index/index-memories.py`) and hooks (`hooks/update-recall.mjs`, etc.) read frontmatter using the shapes documented here.
 
-The stock system prompt's `metadata: { type: ... }` nested wrapper is **handled but non-canonical**: both `index-memories.py:73-79` (via `k.strip()`) and `update-recall.mjs:65-79` (via leading-whitespace tolerance + `metadata:` empty-wrapper drop, fixed 2026-05-13) accept indented children as top-level keys. On any Read after the fix, the recall hook rewrites the file into canonical flat form, so nested-form writes are self-healing on first recall. **Always write the flat form documented here** anyway — relying on the auto-flatten is brittle and depends on the recall hook running before any downstream tool reads the file. Flag drift in conversation so a coordinated update can happen.
+The stock system prompt's `metadata: { type: ... }` nested wrapper is **tolerated on read, never mutated**: both `index-memories.py` (via `k.strip()`) and `update-recall.mjs` (via a leading-whitespace-tolerant key regex) resolve indented children as recognized keys, so `type` and the rest parse correctly from flat OR nested OR `node_type`-bearing frontmatter. The recall hook edits **only** `recall_count`/`last_recalled`, in place, preserving every other byte (key order, the `metadata:` wrapper, indentation). It does **not** reshape files — there is no auto-flatten, by design (the harness's own output is not uniform, so normalizing-on-read was a fight with negative EV that reintroduced the silent-amnesia class; see the Evolution note). **Write the flat form documented here** for the writes you control: it keeps the line-oriented bash/grep tooling working and single-sources the contract. Effectiveness is guaranteed by the tolerant parsers + `tests/test_recall_frontmatter_preserve.mjs`, not by an on-disk shape.
 
 ## File layout (per project)
 
@@ -33,15 +33,17 @@ type: {{user | feedback | project | reference}}
 ---
 ```
 
-**⚠ `type` MUST be a top-level key.** The stock Claude Code system prompt's `# auto memory` block shows a nested `metadata: { type }` shape, but the canonical form is flat. As of 2026-05-13 both parsers tolerate the nested shape — `index-memories.py:64-80` via `k.strip()` and `update-recall.mjs:65-79` via leading-whitespace + empty-wrapper drop — and the recall hook normalizes nested → flat on first Read. Still write flat: any tool that reads frontmatter before the recall hook fires (e.g. one-shot scripts) won't see the auto-flatten, and the canonical form keeps the contract single-sourced. Same applies to every other recognized field below.
+**`type` should be a flat top-level key — the canonical form.** The stock Claude Code system prompt's `# auto memory` block shows a nested `metadata: { type }` shape; the harness also intermittently injects `node_type:`. The engine tolerates all of it: both parsers resolve recognized keys at any indentation (`index-memories.py` via `k.strip()`, `update-recall.mjs` via a leading-whitespace-tolerant regex), and the recall hook **preserves whatever shape it finds** — it never reshapes a file (it edits only `recall_count`/`last_recalled` in place). So nested input does not break and is not "healed"; it just stays as written. Write flat for the writes you control: it keeps `grep '^type:'` and the rest of the line-oriented tooling working and single-sources the contract. Same applies to every other recognized field below.
 
-### Harness-managed field
+### Harness-managed fields
 
 - `originSessionId` — the Claude Code **harness itself** auto-appends this field on every Write/Edit to a memory file if the frontmatter doesn't already contain it, stamping the current session ID. Confirmed by searching the 2.1.x binary for `/^originSessionId:/m.test`. It is NOT written by any hook in `Memory.Pack/hooks/`. Consequences:
   - **Do not flag as drift.** `/memory-lint` must treat it as legitimate metadata.
   - **Do not hand-remove.** The harness will re-add it on the next edit, so removal is futile and just churns the file.
   - **Do not seed it manually.** The harness handles it; writing it yourself is harmless but pointless.
   - The value only records *which session most recently touched a fresh copy of the file*, not the original author — subsequent sessions that edit the file don't overwrite an existing `originSessionId`, but removing and re-editing will stamp the current session.
+
+- `node_type` — the Claude Code harness stamps `node_type: memory` into a **subset** of memory files, intermittently, tied to particular CC write paths/versions (verified 2026-05-18: 7 of 36 files in one store, not every write). Like `originSessionId` it is harness-injected, not written by any `Memory.Pack/` hook. Treat it identically: **do not flag as drift, do not hand-remove** (the harness re-adds it; removal just churns the file), **do not seed it manually**. Unlike `originSessionId` it carries no useful signal — it is a pure harness artifact, recognized solely so the lint store stays quiet. Fighting it (stripping on rewrite) was rejected: it would mean a per-write mutation racing the Edit tool for zero benefit.
 
 ### Decay-tracking fields (optional)
 
@@ -54,7 +56,7 @@ These four fields drive Ebbinghaus-style decay scoring in `/memory-lint --decay`
 
 Missing fields are NOT drift. `/memory-lint --decay` treats absent `last_recalled`/`last_reviewed` as equivalent to `created`; absent `created` falls back to the file's mtime.
 
-No other frontmatter fields are recognized. Anything beyond `name`/`description`/`type`/`originSessionId`/`created`/`last_recalled`/`recall_count`/`last_reviewed` is drift and should be flagged.
+No other frontmatter fields are recognized. Anything beyond `name`/`description`/`type`/`originSessionId`/`node_type`/`created`/`last_recalled`/`recall_count`/`last_reviewed` is drift and should be flagged.
 
 ## Decay model (used by `/memory-lint --decay`)
 
@@ -206,4 +208,8 @@ This schema is user-editable. If you change a type's meaning or add a new field,
 3. Any existing memory files across projects that violate the new contract
 4. The stock system prompt's `# auto memory` block, if you have a way to influence it — though in practice that block ships from Anthropic and may drift independently; treat it as advisory, not authoritative
 
-When the stock system prompt and this file disagree, **this file wins** for any tooling under `Memory.Pack/`. The system prompt's `# auto memory` block is generic Claude Code default guidance; it does not know about this user's custom indexer/hooks. Verified 2026-05-13: Voxtide memories written in the system prompt's nested `metadata: { type }` form were silently misindexed (empty `type` field in the FTS5 store) because `update-recall.mjs`'s regex required a letter at column 0, rejecting indented children — and on first Read it rewrote the file *without* the indented `type` line, permanently dropping the field. Patched 2026-05-13 (Mira-feedback session): the regex now accepts leading whitespace and the rewrite drops a stray empty `metadata:` wrapper, so both parsers handle the nested shape and the recall hook normalizes it to flat on first Read.
+When the stock system prompt and this file disagree, **this file wins** for any tooling under `Memory.Pack/`. The system prompt's `# auto memory` block is generic Claude Code default guidance; it does not know about this user's custom indexer/hooks.
+
+History of the nested-shape handling (the silent-amnesia class):
+- **2026-05-13** — Voxtide memories written in the nested `metadata: { type }` form were silently misindexed (empty `type` in the FTS5 store): `update-recall.mjs`'s regex required a letter at column 0, rejected indented children, and on first Read rewrote the file *without* the `type` line, permanently dropping it. Patched same day: regex made leading-whitespace tolerant + the rewrite dropped a stray empty `metadata:` wrapper, normalizing nested → flat on first Read.
+- **2026-05-18** — the normalize-on-read approach itself was retired. The harness's output is not uniform (intermittent `node_type:` injection), so reshaping every file on Read was a permanent fight with negative EV, and the rewrite was a per-Read content mutation that fed the Edit-tool race. New contract: **tolerate every shape on read, mutate only `recall_count`/`last_recalled` in place, never reshape.** Both parsers already resolve keys at any indentation; `node_type` is now a recognized harness artifact (above). Effectiveness is pinned by `tests/test_recall_frontmatter_preserve.mjs` (runs the real recall hook + real Python parser against flat/nested/`node_type` fixtures), not by an enforced on-disk shape.
