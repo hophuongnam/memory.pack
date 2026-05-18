@@ -63,6 +63,7 @@ preflight || die "dependency preflight failed"
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+SL_LINK="$CLAUDE_DIR/statusline-command.sh"
 MANIFEST="$PREFIX/install/hooks.manifest.json"
 mkdir -p "$CLAUDE_DIR"
 
@@ -71,10 +72,16 @@ if $UNINSTALL; then
   if [ -f "$SETTINGS" ]; then
     [ -f "$PREFIX/install/merge-settings.sh" ] || die "engine not found at $PREFIX (need merge-settings.sh)"
     tmp="$(mktemp)"
-    "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" --uninstall < "$SETTINGS" > "$tmp"
+    "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" --statusline "$SL_LINK" --uninstall < "$SETTINGS" > "$tmp"
     jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "uninstall produced invalid JSON — settings.json untouched"; }
     mv "$tmp" "$SETTINGS"
-    say "removed Memory.Pack hooks + env.MEMORY_PACK_HOME from $SETTINGS"
+    say "removed Memory.Pack hooks + env.MEMORY_PACK_HOME + .statusLine from $SETTINGS"
+  fi
+  # remove the statusline symlink only if it is ours (points into $PREFIX)
+  if [ -L "$SL_LINK" ]; then
+    case "$(readlink "$SL_LINK")" in
+      "$PREFIX"/*) rm -f "$SL_LINK"; say "removed statusline symlink $SL_LINK" ;;
+    esac
   fi
   if $PURGE; then rm -rf "$PREFIX"; say "purged engine dir $PREFIX"; fi
   say "uninstall complete."
@@ -104,17 +111,34 @@ else
     | ( cd "$PREFIX" && tar -xf - )
 fi
 chmod +x "$PREFIX"/hooks/*.sh "$PREFIX"/hooks/*.mjs "$PREFIX"/index/*.py \
-         "$PREFIX"/install/*.sh "$PREFIX"/install.sh 2>/dev/null || true
+         "$PREFIX"/install/*.sh "$PREFIX"/install.sh "$PREFIX"/statusline-command.sh 2>/dev/null || true
 [ -f "$PREFIX/hooks/_lib.sh" ] && [ -f "$MANIFEST" ] || die "engine copy incomplete at $PREFIX"
+
+# ---- statusline symlink (idempotent, foreign-safe) -------------------
+# ~/.claude/statusline-command.sh -> $PREFIX/statusline-command.sh, so
+# settings.json statusLine.command stays a stable host-independent path.
+# A pre-existing REAL file there (a user's own statusline) is never
+# clobbered; in that case we also skip wiring .statusLine.
+SL_SRC="$PREFIX/statusline-command.sh"
+SL_MERGE=()
+if [ ! -f "$SL_SRC" ]; then
+  warn "statusline-command.sh missing from engine ($SL_SRC) — statusLine not wired"
+elif [ -e "$SL_LINK" ] && [ ! -L "$SL_LINK" ]; then
+  warn "$SL_LINK is a real file (not our symlink) — left untouched; statusLine not wired (remove it + re-run to enable)"
+else
+  ln -sfn "$SL_SRC" "$SL_LINK"
+  SL_MERGE=(--statusline "$SL_LINK")
+  say "linked statusline: $SL_LINK -> $SL_SRC"
+fi
 
 # ---- 3. merge settings.json ------------------------------------------
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 [ -f "$SETTINGS.mp-bak" ] || cp "$SETTINGS" "$SETTINGS.mp-bak"   # one-time pristine backup
 tmp="$(mktemp)"
-"$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" < "$SETTINGS" > "$tmp"
+"$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" "${SL_MERGE[@]+"${SL_MERGE[@]}"}" < "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "merge produced invalid JSON — $SETTINGS untouched (backup: $SETTINGS.mp-bak)"; }
 mv "$tmp" "$SETTINGS"
-say "merged 11 Memory.Pack hooks + env.MEMORY_PACK_HOME into $SETTINGS (backup: $SETTINGS.mp-bak)"
+say "merged 11 Memory.Pack hooks + env.MEMORY_PACK_HOME${SL_MERGE[0]:+ + .statusLine} into $SETTINGS (backup: $SETTINGS.mp-bak)"
 
 # ---- 4. CLAUDE.md pointer (idempotent) -------------------------------
 PTR="See \`$PREFIX/SCHEMA.md\` for the canonical auto-memory schema (Memory.Pack)."

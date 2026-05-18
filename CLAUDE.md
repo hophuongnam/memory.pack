@@ -3,7 +3,11 @@
 Session-continuity + auto-memory engine for Claude Code. Git repo
 (`github.com/hophuongnam/memory.pack`, branch `main`), wired globally from
 `~/.claude/settings.json` — hooks run by **absolute path**, never symlinked
-per-project. `hooks/` is the single source of truth.
+per-project. `hooks/` is the single source of truth. `statusline-command.sh`
+(repo root) is the one symlinked artifact: `~/.claude/statusline-command.sh`
+→ here, invoked through that symlink by settings.json `statusLine.command`.
+This project owns its development (relocated out of the Management project
+2026-05-18); `install.sh` wires the symlink + `.statusLine` on any host.
 
 ## Working style (this project)
 
@@ -66,9 +70,10 @@ project store — types, frontmatter, decay model. No per-project copy.
    `md5|head -c8` produced an empty `PROJECT_HASH` on Linux → silent
    boot-context amnesia — the reason this exists); never reorder so python3
    precedes md5sum/md5 (it sits on boot-inject's pre-marker race path).
-2. **statusline parity.** `Management/statusline-command.sh`'s
+2. **statusline parity.** `statusline-command.sh`'s (repo root)
    `mp_proj_hash` must stay value-equal to `_mp_hash` or `⏭skip-replay`
-   targets the wrong sentinel. (Lives in the sibling Management project.)
+   targets the wrong sentinel. `test_hash_shim` proves this in-repo
+   (resolves the script off `$HERE`, never a hard-coded path).
 3. **snake↔camel hook stdin.** Every hook parsing CC stdin must accept
    both `session_id`/`sessionId`, `hook_event_name`/`hookEventName`, etc.,
    or marker/boot-context writes silently no-op across CC releases.
@@ -88,7 +93,13 @@ SCHEMA pointers resolve, not literal). `hooks/_lib.mjs`
 unix globals > Windows `%APPDATA%\npm` > bare; degrades gracefully).
 Install on any host: `git clone … && ./install.sh` (idempotent,
 null-command-safe settings.json merge; `--uninstall`/`--check`;
-`--with-sdk`). **Windows = WSL2** (engine runs unchanged). A native
+`--with-sdk`). It also symlinks `~/.claude/statusline-command.sh`→
+`$PREFIX/statusline-command.sh` and merges `.statusLine` via
+`merge-settings.sh --statusline` (opt-in arg; ownership keyed on basename
+`statusline-command.sh` exactly like hooks; foreign statuslines + sibling
+keys e.g. `padding` untouched; a pre-existing real file is never clobbered;
+`--uninstall` removes the owned symlink + `.statusLine`). Covered by
+`test_install` + `test_settings_merge`. **Windows = WSL2** (engine runs unchanged). A native
 PowerShell port was analyzed and **deliberately declined** (permanent
 dual-maintenance, negative-EV, reinvites silent amnesia). Native-only
 boundary documented at `tests/test_path_portability.mjs:1` — do NOT "fix"

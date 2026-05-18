@@ -12,11 +12,12 @@
 # install.sh owns backup/atomic-write).
 set -euo pipefail
 
-PREFIX="" MANIFEST="" UNINSTALL=false
+PREFIX="" MANIFEST="" UNINSTALL=false SL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --prefix)   PREFIX="$2"; shift 2 ;;
     --manifest) MANIFEST="$2"; shift 2 ;;
+    --statusline) SL="$2"; shift 2 ;;
     --uninstall) UNINSTALL=true; shift ;;
     *) echo "merge-settings.sh: unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -28,6 +29,7 @@ ENTRIES=$(jq -c '.entries' "$MANIFEST")
 
 jq \
   --arg prefix "$PREFIX" \
+  --arg sl "$SL" \
   --argjson manifest "$ENTRIES" \
   --argjson uninstall "$UNINSTALL" '
   ($manifest | map(.script) | unique) as $owned
@@ -70,5 +72,20 @@ jq \
   | (if $uninstall
      then (if (.env? | type) == "object" then del(.env.MEMORY_PACK_HOME) else . end)
      else .env = ((.env // {}) | .MEMORY_PACK_HOME = $prefix)
+     end)
+
+  # ---- statusLine: opt-in via --statusline; basename "statusline-command.sh"
+  #      is the ownership key (mirrors hook script-basename ownership).
+  #      Create-or-upgrade merges into the existing object so sibling keys
+  #      (e.g. padding) survive; foreign statuslines are never touched. ----
+  | (if $sl == "" then .
+     else
+       (((.statusLine.command // "") | tostring | split("/") | last) == "statusline-command.sh") as $mpsl
+       | (if $uninstall
+          then (if $mpsl then del(.statusLine) else . end)
+          else (if (has("statusLine") | not) or $mpsl
+                then .statusLine = ((.statusLine // {}) + {type: "command", command: ("bash " + $sl)})
+                else . end)
+          end)
      end)
 '

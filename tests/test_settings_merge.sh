@@ -92,5 +92,47 @@ unnc=$(jq '[.hooks.PostToolUse[]?|select(.matcher=="Bar")]|length' "$TMP/un.json
 jq -e '.theme=="dark" and .permissions.allow==["Bash(ls:*)"]' "$TMP/un.json" >/dev/null \
   && ok "uninstall leaves unrelated keys intact" || bad "uninstall unrelated keys"
 
+# === statusLine wiring: opt-in via --statusline, basename-owned, foreign-safe,
+#     sibling-key-preserving, idempotent (mirrors the hook merge contract) ===
+SL="/sandbox/.claude/statusline-command.sh"   # the managed symlink path install.sh passes
+
+# fresh host (no .statusLine) -> CREATE as {type:command, command:"bash $SL"}
+echo '{"theme":"x"}' > "$TMP/sl_fresh.json"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" < "$TMP/sl_fresh.json" > "$TMP/sl_fresh.out" 2>"$TMP/slerr" \
+  && ok "statusLine: merge accepts --statusline" || bad "statusLine: merge accepts --statusline" "$(cat "$TMP/slerr")"
+jq -e --arg c "bash $SL" '.statusLine.type=="command" and .statusLine.command==$c' "$TMP/sl_fresh.out" >/dev/null 2>&1 \
+  && ok "statusLine: created on fresh host (bash <symlink>)" || bad "statusLine: created on fresh host"
+
+# foreign .statusLine (basename != statusline-command.sh) -> UNTOUCHED + siblings kept
+echo '{"statusLine":{"type":"command","command":"/Applications/SuperIsland.app/sl.sh","padding":2}}' > "$TMP/sl_for.json"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" < "$TMP/sl_for.json" > "$TMP/sl_for.out" 2>/dev/null
+jq -e '.statusLine.command=="/Applications/SuperIsland.app/sl.sh" and .statusLine.padding==2' "$TMP/sl_for.out" >/dev/null 2>&1 \
+  && ok "statusLine: foreign statusline untouched" || bad "statusLine: foreign statusline untouched"
+
+# stale MP statusline (our basename, old path) -> command UPGRADED, sibling key kept
+echo '{"statusLine":{"type":"command","command":"bash /old/p/statusline-command.sh","padding":7}}' > "$TMP/sl_stale.json"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" < "$TMP/sl_stale.json" > "$TMP/sl_stale.out" 2>/dev/null
+jq -e --arg c "bash $SL" '.statusLine.command==$c and .statusLine.padding==7' "$TMP/sl_stale.out" >/dev/null 2>&1 \
+  && ok "statusLine: stale MP upgraded, sibling keys preserved" || bad "statusLine: stale MP upgraded + siblings"
+
+# idempotent: re-merge created output -> byte-identical
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" < "$TMP/sl_fresh.out" > "$TMP/sl_fresh.out2" 2>/dev/null
+diff <(jq -S . "$TMP/sl_fresh.out") <(jq -S . "$TMP/sl_fresh.out2") >/dev/null 2>&1 \
+  && ok "statusLine: idempotent" || bad "statusLine: idempotent"
+
+# back-compat: no --statusline arg -> .statusLine completely untouched
+echo '{"statusLine":{"command":"keepme"}}' > "$TMP/sl_na.json"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" < "$TMP/sl_na.json" > "$TMP/sl_na.out" 2>/dev/null
+jq -e '.statusLine.command=="keepme"' "$TMP/sl_na.out" >/dev/null 2>&1 \
+  && ok "statusLine: omitted --statusline leaves it untouched (back-compat)" || bad "statusLine: back-compat no-arg"
+
+# uninstall: MP statusline removed; foreign survives
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" --uninstall < "$TMP/sl_fresh.out" > "$TMP/sl_un.out" 2>/dev/null
+jq -e 'has("statusLine")|not' "$TMP/sl_un.out" >/dev/null 2>&1 \
+  && ok "statusLine: uninstall removes MP statusline" || bad "statusLine: uninstall removes MP statusline"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SL" --uninstall < "$TMP/sl_for.out" > "$TMP/sl_unf.out" 2>/dev/null
+jq -e '.statusLine.command=="/Applications/SuperIsland.app/sl.sh"' "$TMP/sl_unf.out" >/dev/null 2>&1 \
+  && ok "statusLine: uninstall keeps foreign statusline" || bad "statusLine: uninstall keeps foreign statusline"
+
 echo "----"
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fail FAILED"; exit 1; fi

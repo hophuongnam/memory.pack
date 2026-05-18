@@ -104,8 +104,10 @@ else bad "loud-fail: stderr explains the failure" "non-empty" "empty"; fi
 # wrong .skip-replay-<hash> sentinel. The legacy statusline used bare
 # `md5`, which DOES NOT EXIST on Linux — the indicator was silently dead
 # on every Linux host. Fix = a value-identical md5sum→md5→python3 helper
-# `mp_proj_hash`. Locate the canonical statusline; SKIP if absent.
-SL="$HOME/Resilio.Sync/Management/statusline-command.sh"
+# `mp_proj_hash`. statusline-command.sh now lives at this repo's root
+# (Memory.Pack owns its development); resolve it clone-location-independently
+# off $HERE, never a hard-coded absolute path. SKIP only if truly absent.
+SL="$HERE/../statusline-command.sh"
 if [ -f "$SL" ]; then
   if grep -Eq 'md5 2>/dev/null \| head -c 8' "$SL"; then
     bad "statusline: legacy bare-md5 (Linux-dead) removed" "absent" "present"
