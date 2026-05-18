@@ -5,3 +5,5 @@ hooks/.replay-pid-*
 hooks/.replay-error-*
 index/search.db
 index/search.db-*
+__pycache__/
+*.pyc
