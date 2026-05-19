@@ -92,6 +92,16 @@ unnc=$(jq '[.hooks.PostToolUse[]?|select(.matcher=="Bar")]|length' "$TMP/un.json
 jq -e '.theme=="dark" and .permissions.allow==["Bash(ls:*)"]' "$TMP/un.json" >/dev/null \
   && ok "uninstall leaves unrelated keys intact" || bad "uninstall unrelated keys"
 
+# clean-host round-trip: pristine {} -> install-merge -> --uninstall MUST be {}
+# (regression guard for the empty-container residue; install.sh passes --statusline;
+#  SLC basename MUST be statusline-command.sh so uninstall's del(.statusLine) fires
+#  and the ONLY possible residue is the env/hooks emptied-parent bug)
+SLC="$TMP/statusline-command.sh"
+echo '{}' > "$TMP/clean.json"
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SLC" < "$TMP/clean.json" > "$TMP/clean.ins" 2>/dev/null
+"$MERGE" --prefix "$PREFIX" --manifest "$MAN" --statusline "$SLC" --uninstall < "$TMP/clean.ins" > "$TMP/clean.un" 2>/dev/null
+if [ "$(jq -cS . "$TMP/clean.un")" = "{}" ]; then ok "clean-host install→uninstall is pristine {}"; else bad "clean-host uninstall pristine {}" "got $(jq -cS . "$TMP/clean.un")"; fi
+
 # === statusLine wiring: opt-in via --statusline, basename-owned, foreign-safe,
 #     sibling-key-preserving, idempotent (mirrors the hook merge contract) ===
 SL="/sandbox/.claude/statusline-command.sh"   # the managed symlink path install.sh passes

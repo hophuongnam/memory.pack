@@ -88,4 +88,11 @@ jq \
                 else . end)
           end)
      end)
+
+  # ---- uninstall hygiene: drop env/hooks containers WE emptied (never
+  #      when they still hold foreign keys; empty {} ≡ absent for CC) ----
+  | (if $uninstall
+     then (if ((.env?   | type) == "object") and ((.env   | length) == 0) then del(.env)   else . end)
+        | (if ((.hooks? | type) == "object") and ((.hooks | length) == 0) then del(.hooks) else . end)
+     else . end)
 '
