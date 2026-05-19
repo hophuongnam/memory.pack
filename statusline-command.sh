@@ -133,7 +133,26 @@ fi
 continuity_part=""
 HOOK_STATE_DIR="$HOME/.claude/hook_state"
 MEMORY_BASE="$HOME/.claude/projects"
-HOOKS_DIR="$HOME/Resilio.Sync/Memory.Pack/hooks"
+
+# Resolve the hooks dir the SAME way the writers locate themselves, so the
+# .boot-marker-<id> / .skip-replay-<hash> this script READS are the exact
+# files boot-inject.sh:47,222 / session-end.sh:65,97 WRITE. Those write to
+# $SCRIPT_DIR = abs dirname of the hook script. This script sits beside
+# hooks/ and is invoked through the ~/.claude/statusline-command.sh
+# symlink, so follow ONE symlink hop and append /hooks. Bare
+# `readlink ... || echo` + cd/pwd is the engine's proven BSD-safe idiom
+# (session-end.sh:86-87) — NOT GNU-only `readlink -f`, which is absent on
+# BSD/macOS. Self-location, NOT $MEMORY_PACK_HOME: the writers never
+# consult $MEMORY_PACK_HOME for $SCRIPT_DIR, so mirroring their derivation
+# is what keeps reader and writer paths from silently diverging
+# (statusline-parity, invariant #2). The legacy hardcoded
+# $HOME/Resilio.Sync/Memory.Pack/hooks dead-ended every relocated
+# (~/.memory-pack, --prefix) install — the markers existed but were read
+# from a directory that did not.
+SL_DIR="$(cd "$(dirname "$0")" && pwd)"
+SL_PATH="$SL_DIR/$(basename "$0")"
+MP_HOOKS_DIR="$(cd "$SL_DIR" && cd "$(dirname "$(readlink "$SL_PATH" 2>/dev/null || echo "$SL_PATH")")" && pwd)/hooks"
+HOOKS_DIR="$MP_HOOKS_DIR"
 
 # Find memory dir for current project (encode project_dir path)
 if [ -n "$project_dir" ]; then
@@ -173,7 +192,7 @@ fi
 # prior session". boot-inject.sh still sets marker=loaded for that case, so
 # the replay-err overlay needs the transcript grep layered on top.
 boot_status=""
-marker_file="$HOME/Resilio.Sync/Memory.Pack/hooks/.boot-marker-${session_id}"
+marker_file="$MP_HOOKS_DIR/.boot-marker-${session_id}"
 if [ -n "$session_id" ] && [ -f "$marker_file" ]; then
     case "$(cat "$marker_file" 2>/dev/null)" in
         loaded)

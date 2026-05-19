@@ -108,7 +108,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-9 suites in `tests/` — run all before any commit:
+10 suites in `tests/` — run all before any commit:
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -125,7 +125,13 @@ frontmatter — runs the real `update-recall.mjs` + real Python
 silent-amnesia class), `test_inject_preamble_epistemic` (the
 memory-hint inject preamble must carry the verify-before-asserting
 epistemic clause, not just the relevance gate — structural-source pin
-for the *read-side* analog of the silent-amnesia class). Two accepted
+for the *read-side* analog of the silent-amnesia class),
+`test_statusline_marker_path` (statusline must read
+`.boot-marker-<id>`/`.skip-replay-<hash>` from the same dir the writers
+write them — self-located via the symlink, BSD-safe bare `readlink`, no
+hardcoded Resilio path; structural + behavioral-via-symlink + a
+pending/booted contents mutation; the reader↔writer path-parity analog of
+invariant #2, silent on relocated installs). Two accepted
 patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
