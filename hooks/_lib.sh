@@ -39,3 +39,52 @@ _mp_hash() {
     return 1
   fi
 }
+
+# _mp_resolve_project_key: derive PROJECT_KEY anchored to CC's authoritative
+# per-session slug (= basename of dirname of transcript_path), not the live
+# cwd. Walks up from $2 (best-guess starting dir, normally
+# workspace.project_dir-or-cwd-or-$PWD) looking for the ancestor whose
+# [/.] → - slugification equals CC's slug. That ancestor is the project
+# root CC chose at session launch; using it keeps every Memory.Pack hash /
+# slug / MEMORY_DIR / boot-context filename aligned with what CC writes the
+# JSONL under.
+#
+# Why this exists: PROJECT_KEY="${PROJECT_DIR:-${CWD:-$PWD}}" was the prior
+# scheme. workspace.project_dir is empty in some CC versions (proven in
+# active use — boot-context-947df9d4 in Pre.Audit, Green.World subfolder
+# hash, holding content that belongs in Pre.Audit's e5edaabc store); the
+# fallback to .cwd then follows the user's mid-session `cd`. Result:
+# session-end writes boot-context under the subfolder hash, the next
+# session at the project root reads under the parent hash, sees nothing,
+# silent amnesia. This resolver is the writer↔CC path-parity defense and
+# is the source-of-truth for both session-end.sh and boot-inject.sh (and
+# mirrored in statusline-command.sh for invariant #2).
+#
+# Args:
+#   $1 = transcript_path from hook stdin (may be empty)
+#   $2 = fallback project key (e.g. "${PROJECT_DIR:-${CWD:-$PWD}}")
+# Output: the resolved absolute project root, or $2 unchanged if the
+# transcript anchor is missing or no ancestor of $2 matches.
+_mp_resolve_project_key() {
+  _mp_transcript="$1"
+  _mp_fallback="$2"
+  if [ -z "$_mp_transcript" ] || [ -z "$_mp_fallback" ]; then
+    printf '%s' "$_mp_fallback"
+    return 0
+  fi
+  _mp_cc_slug=$(basename "$(dirname "$_mp_transcript")")
+  if [ -z "$_mp_cc_slug" ]; then
+    printf '%s' "$_mp_fallback"
+    return 0
+  fi
+  _mp_dir="$_mp_fallback"
+  while [ -n "$_mp_dir" ] && [ "$_mp_dir" != "/" ] && [ "$_mp_dir" != "." ]; do
+    _mp_candidate=$(printf '%s' "$_mp_dir" | sed 's|[/.]|-|g')
+    if [ "$_mp_candidate" = "$_mp_cc_slug" ]; then
+      printf '%s' "$_mp_dir"
+      return 0
+    fi
+    _mp_dir=$(dirname "$_mp_dir")
+  done
+  printf '%s' "$_mp_fallback"
+}

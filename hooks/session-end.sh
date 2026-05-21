@@ -24,8 +24,11 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 [ -z "$SESSION_ID" ] && exit 0
 
 # Scope boot context + pid file per-project so project A's replay can't leak
-# into project B's next session.
-PROJECT_KEY="${PROJECT_DIR:-${CWD:-$PWD}}"
+# into project B's next session. PROJECT_KEY is resolved against CC's
+# per-session slug (basename of dirname of transcript_path) so a mid-session
+# `cd` into a subfolder cannot retarget the hash — that is the silent-amnesia
+# class the resolver in _lib.sh defends against.
+PROJECT_KEY=$(_mp_resolve_project_key "$TRANSCRIPT" "${PROJECT_DIR:-${CWD:-$PWD}}")
 PROJECT_HASH=$(printf '%s' "$PROJECT_KEY" | _mp_hash)
 PROJECT_NAME=$(basename "$PROJECT_KEY" 2>/dev/null)
 [ -z "$PROJECT_NAME" ] && PROJECT_NAME="unknown"

@@ -31,8 +31,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh" || { echo "memory-pack: cannot source $SCRIPT_DIR/_lib.sh" >&2; exit 1; }
 
 # Scope boot context + pid file per-project so we don't inject project A's
-# replay into project B's next session.
-PROJECT_KEY="${PROJECT_DIR:-${CWD:-$PWD}}"
+# replay into project B's next session. PROJECT_KEY is resolved against
+# CC's per-session slug (basename of dirname of transcript_path) so a
+# mid-session `cd` into a subfolder cannot retarget the hash — that is the
+# silent-amnesia class the resolver in _lib.sh defends against.
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty')
+PROJECT_KEY=$(_mp_resolve_project_key "$TRANSCRIPT" "${PROJECT_DIR:-${CWD:-$PWD}}")
 PROJECT_HASH=$(printf '%s' "$PROJECT_KEY" | _mp_hash)
 # Slug mirrors Claude Code's project dir naming: abs cwd with `/` and `.` → `-`.
 PROJECT_SLUG=$(printf '%s' "$PROJECT_KEY" | sed 's|[/.]|-|g')

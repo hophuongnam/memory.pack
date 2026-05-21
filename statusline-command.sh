@@ -46,6 +46,32 @@ mp_proj_hash() {
     fi
 }
 
+# Mirror of hooks/_lib.sh _mp_resolve_project_key — invariant #2 parity:
+# the writers (boot-inject.sh / session-end.sh) now anchor PROJECT_KEY to
+# CC's per-session slug (= basename of dirname of transcript_path) by
+# walking up from the best-guess dir to the ancestor whose [/.] → -
+# slugification equals CC's slug. Statusline MUST do the same or
+# .skip-replay-<hash> targets the wrong sentinel on every session whose
+# workspace.project_dir is empty or whose hooks resolved to a parent the
+# stdin `project_dir` field misses. Same self-locating, OS-portable
+# behavior as the helper in _lib.sh; not sourced because this script is
+# /bin/sh and lives outside hooks/.
+mp_resolve_project_key() {
+    _tp="$1"
+    _fb="$2"
+    if [ -z "$_tp" ] || [ -z "$_fb" ]; then printf '%s' "$_fb"; return; fi
+    _slug=$(basename "$(dirname "$_tp")")
+    [ -z "$_slug" ] && { printf '%s' "$_fb"; return; }
+    _d="$_fb"
+    while [ -n "$_d" ] && [ "$_d" != "/" ] && [ "$_d" != "." ]; do
+        if [ "$(printf '%s' "$_d" | sed 's|[/.]|-|g')" = "$_slug" ]; then
+            printf '%s' "$_d"; return
+        fi
+        _d=$(dirname "$_d")
+    done
+    printf '%s' "$_fb"
+}
+
 # Format reset epoch (seconds) to a short relative countdown.
 format_reset() {
     reset_epoch="$1"
@@ -224,8 +250,11 @@ fi
 # session-end.sh:28 / boot-inject.sh:35. Surface it so continuity being
 # opted out for this session is visible rather than silent.
 skip_part=""
-if [ -n "$project_dir" ]; then
-    proj_hash=$(printf '%s' "$project_dir" | mp_proj_hash 2>/dev/null)
+# Resolve PROJECT_KEY against CC's slug (transcript-anchored) so the hash
+# matches hooks' derivation even when workspace.project_dir is empty.
+proj_key=$(mp_resolve_project_key "$transcript" "$project_dir")
+if [ -n "$proj_key" ]; then
+    proj_hash=$(printf '%s' "$proj_key" | mp_proj_hash 2>/dev/null)
     if [ -n "$proj_hash" ] && [ -f "$HOOKS_DIR/.skip-replay-${proj_hash}" ]; then
         skip_part="\033[1;33m⏭skip-replay\033[0m"
     fi

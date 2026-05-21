@@ -79,7 +79,16 @@ project store — types, frontmatter, decay model. No per-project copy.
    or marker/boot-context writes silently no-op across CC releases.
 4. **Project slug** must mirror CC's `~/.claude/projects/<slug>` naming
    (abs cwd, `/`+`.`→`-`) identically in `boot-inject.sh`, `replay.mjs`,
-   and `index-memories.py`, or memories mis-file.
+   and `index-memories.py`, or memories mis-file. PROJECT_KEY is resolved
+   via `_mp_resolve_project_key` (`_lib.sh`) — anchor to CC's per-session
+   slug (`basename(dirname(transcript_path))`) and walk up the
+   workspace/cwd ancestor whose `[/.]→-` slugification matches. The bare
+   `${PROJECT_DIR:-${CWD:-$PWD}}` chain follows the user's mid-session
+   `cd` and split-brains memory across subfolder hashes when
+   `workspace.project_dir` is empty (the Pre.Audit symptom: a Green.World
+   subfolder hash holding boot-context content that belonged in the
+   parent's store). Mirrored in `statusline-command.sh` for invariant #2;
+   `test_slug_anchored_to_transcript_path` pins all three sites.
 5. **Runtime state is never packaged.** `.boot-context-*`, `.boot-marker-*`,
    `.replay-*`, `.skip-replay-*`, `search.db` are derived/ephemeral
    (`.gitignore` + `install.sh` EXCL + the test scan must all agree).
@@ -108,7 +117,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-10 suites in `tests/` — run all before any commit:
+11 suites in `tests/` — run all before any commit:
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -131,7 +140,17 @@ for the *read-side* analog of the silent-amnesia class),
 write them — self-located via the symlink, BSD-safe bare `readlink`, no
 hardcoded Resilio path; structural + behavioral-via-symlink + a
 pending/booted contents mutation; the reader↔writer path-parity analog of
-invariant #2, silent on relocated installs). Two accepted
+invariant #2, silent on relocated installs),
+`test_slug_anchored_to_transcript_path` (PROJECT_HASH must derive from
+CC's per-session slug = `basename(dirname(transcript_path))` walked back
+up from cwd, not from the live cwd that follows mid-session `cd` — pins
+the resolver in `_lib.sh`, its use in `boot-inject.sh` +
+`session-end.sh` + `statusline-command.sh`, a behavioral subprocess that
+loads a parent-hash boot-context when cwd is a subfolder, and a value
+mutation where parent context wins over a sibling subfolder context;
+guards the writer↔CC path-parity analog of invariant #4, the
+silent-amnesia mode that split Pre.Audit's boot-contexts across
+Green.World/ACPay/Red.Sunrise subfolder hashes). Two accepted
 patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
