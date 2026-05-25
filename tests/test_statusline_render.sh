@@ -453,5 +453,45 @@ if [ -f "$SL" ]; then
     || bad "medium mode: bar width = 6 per segment" "got $bar_chars"
 fi
 
+# ─── statusline-command.sh integration: narrow mode ───────────────────────
+if [ -f "$SL" ]; then
+  out=$(COLUMNS=48 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+
+  lc=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  [ "$lc" = "2" ] && ok "narrow mode: 2 lines (no sparkline)" \
+    || bad "narrow mode: 2 lines (no sparkline)" "got $lc; out: $out"
+
+  # No sparkline glyphs anywhere.
+  if echo "$out" | grep -qE '[▁▂▃▄▅▆▇█]'; then
+    bad "narrow mode: no sparkline glyphs"
+  else
+    ok "narrow mode: no sparkline glyphs"
+  fi
+
+  # No bars on 5h / 7d (just percentages).
+  bar_chars=$(echo "$out" | sed -n '2p' | grep -oE '[▓░]' | wc -l | tr -d ' ')
+  [ "$bar_chars" = "0" ] && ok "narrow mode: no bars (just %)" \
+    || bad "narrow mode: no bars" "got $bar_chars bars"
+
+  # Boot indicator still present (silent-amnesia signal, never dropped).
+  # Set up a marker file in the real HOOKS_DIR so the script's mp_resolve_project_key
+  # → marker_file path resolves to it.
+  HOOKS_TEST_DIR="$HERE/../hooks"
+  marker="$HOOKS_TEST_DIR/.boot-marker-test-session-full"
+  echo "loaded" > "$marker"
+  trap 'rm -rf "$TMPHOME" "$TMPLOG" "$marker"' EXIT
+  out2=$(COLUMNS=48 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out2" | grep -q 'booted' \
+    && ok "narrow mode: boot indicator (✓booted) preserved" \
+    || bad "narrow mode: boot indicator preserved" "out2: $out2"
+
+  # Model pill compacted to bare 'opus' in narrow mode (drops version suffix).
+  # Check for ' opus ' (with spaces — the pill format is " ${pill_label} ")
+  # so 'opus-4' (un-compacted) does NOT match. Pins the narrow compaction step.
+  echo "$out2" | head -n 1 | grep -q ' opus ' \
+    && ok "narrow mode: pill label compacted to 'opus'" \
+    || bad "narrow mode: pill label compacted to 'opus'" "got: $(echo "$out2" | head -1)"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
