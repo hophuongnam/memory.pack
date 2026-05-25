@@ -14,6 +14,11 @@ bad() { printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
 # ─── theme schema ─────────────────────────────────────────────────────────
 [ -f "$THEME" ] || { echo "FAIL  hooks/statusline-theme.sh missing"; exit 1; }
 
+# theme must produce no stdout/stderr at source time (stray echo → silently
+# corrupts the rendered statusline, the silent-amnesia class).
+src_out=$(sh -c '. "$1" 2>&1' _ "$THEME")
+[ -z "$src_out" ] && ok "theme sources silently" || bad "theme sources silently" "got: $src_out"
+
 # Source in a subshell to check var exports without polluting the test env.
 THEME_VARS=$(sh -c '. "$1" && set | grep "^THEME_" | sort' _ "$THEME")
 expected_vars="
@@ -38,6 +43,7 @@ THEME_FG_PWD
 THEME_FG_SKIP_REPLAY
 THEME_FG_VIBE
 THEME_GRAD_STOPS
+THEME_NAME
 THEME_PILL_FG_DARK
 THEME_PILL_FG_LIGHT
 THEME_PILL_HAIKU_ANCHOR
