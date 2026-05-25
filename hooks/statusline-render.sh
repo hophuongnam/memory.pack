@@ -58,6 +58,9 @@ mp_gradient_color() {
           exit
         }
       }
+      # Unreachable for well-formed sorted stops [0,1]; guards malformed input
+      # (unsorted, or sparse range like 0.2→0.9 leaving a hole). Emits last
+      # stop as a safe-ish fallback rather than empty output.
       printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]
     }'
 }

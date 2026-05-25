@@ -171,6 +171,24 @@ if [ -f "$RENDER" ]; then
   c=$(grad_color_for 0.375)
   [ "$c" = "248 185 20" ] && ok "gradient second-segment interpolation correct" || bad "gradient second-segment interpolation correct" "got '$c'"
 
+  # Interior stop boundaries — exact stop values must win even though both
+  # adjacent segments satisfy the inclusive `t >= st[i] && t <= st[i+1]` test.
+  # Pins the "first-match-wins-via-exit" contract for t=0.50 and t=0.75.
+  c=$(grad_color_for 0.50)
+  [ "$c" = "255 140 20" ] && ok "gradient t=0.50 hits third stop" || bad "gradient t=0.50 hits third stop" "got '$c'"
+  c=$(grad_color_for 0.75)
+  [ "$c" = "220 40 50" ] && ok "gradient t=0.75 hits fourth stop" || bad "gradient t=0.75 hits fourth stop" "got '$c'"
+
+  # Third segment mid-point (0.50→0.75): t=0.625; u=0.5 →
+  # r=(255+220)/2=237.5→238, g=(140+40)/2=90, b=(20+50)/2=35
+  c=$(grad_color_for 0.625)
+  [ "$c" = "238 90 35" ] && ok "gradient third-segment interpolation correct" || bad "gradient third-segment interpolation correct" "got '$c'"
+
+  # Fourth segment mid-point (0.75→1.00): t=0.875; u=0.5 →
+  # r=(220+170)/2=195, g=(40+60)/2=50, b=(50+210)/2=130
+  c=$(grad_color_for 0.875)
+  [ "$c" = "195 50 130" ] && ok "gradient fourth-segment interpolation correct" || bad "gradient fourth-segment interpolation correct" "got '$c'"
+
   # Clamp: t < 0 → first stop
   c=$(grad_color_for "-0.5")
   [ "$c" = "40 210 80" ] && ok "gradient clamps t<0 to first" || bad "gradient clamps t<0 to first" "got '$c'"
