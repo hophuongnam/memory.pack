@@ -101,5 +101,38 @@ if [ -f "$ICONS" ]; then
   done
 fi
 
+# ─── mp_pill_fg luminance flip ────────────────────────────────────────────
+RENDER="$HOOKS/statusline-render.sh"
+[ -f "$RENDER" ] || bad "hooks/statusline-render.sh exists"
+
+if [ -f "$RENDER" ]; then
+  # Source-time silence contract — pure function definitions, no top-level
+  # side effects. Catches stray echo/printf in helper definitions.
+  render_out=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" 2>&1' _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER")
+  [ -z "$render_out" ] && ok "render sources silently" || bad "render sources silently" "got: $render_out"
+
+  pill_fg_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_pill_fg "$5"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1"
+  }
+
+  # Bright (Y=255) → dark fg
+  fg=$(pill_fg_for "255 255 255")
+  [ "$fg" = "15 15 15" ] && ok "white anchor → dark fg" || bad "white anchor → dark fg" "got '$fg'"
+
+  # Black (Y=0) → light fg
+  fg=$(pill_fg_for "0 0 0")
+  [ "$fg" = "235 235 235" ] && ok "black anchor → light fg" || bad "black anchor → light fg" "got '$fg'"
+
+  # Mid-gray Y=128 boundary: 128 128 128 → Y = 0.299*128+0.587*128+0.114*128 = 128
+  # Threshold is Y >= 128 → dark; should pick dark.
+  fg=$(pill_fg_for "128 128 128")
+  [ "$fg" = "15 15 15" ] && ok "Y=128 boundary picks dark" || bad "Y=128 boundary picks dark" "got '$fg'"
+
+  # Opus anchor (255 216 77) → Y = 0.299*255 + 0.587*216 + 0.114*77 ≈ 211.6 → dark
+  fg=$(pill_fg_for "255 216 77")
+  [ "$fg" = "15 15 15" ] && ok "opus anchor → dark fg" || bad "opus anchor → dark fg" "got '$fg'"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
