@@ -11,16 +11,16 @@
 input=$(cat)
 
 # --- Stdin fields (session-specific) ---
-project_dir=$(echo "$input" | jq -r '.workspace.project_dir // empty')
+project_dir=$(echo "$input"   | jq -r '.workspace.project_dir                       // .workspace.projectDir                        // empty')
 dir=$(basename "$project_dir")
-model=$(echo "$input" | jq -r '.model.display_name // empty')
-ctx=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-transcript=$(echo "$input" | jq -r '.transcript_path // empty')
-session_id=$(echo "$input" | jq -r '.session_id // empty')
-five_h=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-five_h_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
-seven_d=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
-seven_d_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
+model=$(echo "$input"         | jq -r '.model.display_name                          // .model.displayName                           // empty')
+ctx=$(echo "$input"           | jq -r '.context_window.used_percentage              // .contextWindow.usedPercentage                // empty')
+transcript=$(echo "$input"    | jq -r '.transcript_path                             // .transcriptPath                              // empty')
+session_id=$(echo "$input"    | jq -r '.session_id                                  // .sessionId                                   // empty')
+five_h=$(echo "$input"        | jq -r '.rate_limits.five_hour.used_percentage       // .rateLimits.fiveHour.usedPercentage           // empty')
+five_h_reset=$(echo "$input"  | jq -r '.rate_limits.five_hour.resets_at             // .rateLimits.fiveHour.resetsAt                 // empty')
+seven_d=$(echo "$input"       | jq -r '.rate_limits.seven_day.used_percentage       // .rateLimits.sevenDay.usedPercentage           // empty')
+seven_d_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at             // .rateLimits.sevenDay.resetsAt                 // empty')
 
 # --- Vibe coding method ---
 vibe=""

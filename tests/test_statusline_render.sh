@@ -340,5 +340,33 @@ if [ -f "$RENDER" ]; then
   [ "$out" = "narrow" ] && ok "non-numeric cols → narrow, silent" || bad "non-numeric cols → narrow, silent" "got '$out'"
 fi
 
+# ─── snake↔camel stdin parsing on statusline-command.sh (D7, invariant #3) ─
+SL="$HERE/../statusline-command.sh"
+if [ -f "$SL" ]; then
+  # Every jq line that extracts a CC stdin field must include `// .<camelKey> //` fallback.
+  # Fields we care about: workspace.project_dir → workspace.projectDir,
+  # model.display_name → model.displayName, context_window.used_percentage → contextWindow.usedPercentage,
+  # transcript_path → transcriptPath, session_id → sessionId, rate_limits.* → rateLimits.*.
+  for snake in 'workspace.project_dir' 'model.display_name' 'context_window.used_percentage' \
+               'transcript_path' 'session_id' 'rate_limits.five_hour' 'rate_limits.seven_day'; do
+    if grep -q "\.${snake}" "$SL"; then
+      camel=$(printf '%s' "$snake" | awk -F. '{
+        for (i=1; i<=NF; i++) {
+          n = split($i, parts, "_")
+          out = parts[1]
+          for (j=2; j<=n; j++) out = out toupper(substr(parts[j],1,1)) substr(parts[j],2)
+          $i = out
+        }
+        out2 = $1; for (k=2; k<=NF; k++) out2 = out2 "." $k; print out2
+      }')
+      if grep -q "\.${snake}" "$SL" && grep -q "\.${camel}" "$SL"; then
+        ok "stdin field $snake has camelCase fallback $camel"
+      else
+        bad "stdin field $snake has camelCase fallback $camel"
+      fi
+    fi
+  done
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
