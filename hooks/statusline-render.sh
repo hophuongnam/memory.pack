@@ -19,6 +19,9 @@
 mp_pill_fg() {
   printf '%s\n' "$1" | awk -v dark="$THEME_PILL_FG_DARK" -v light="$THEME_PILL_FG_LIGHT" '{
     y = 0.299*$1 + 0.587*$2 + 0.114*$3
+    # `> 127` is equivalent to `>= 128` for integer RGB in [0,255] and avoids
+    # the IEEE 754 rounding where 0.299+0.587+0.114 ≠ 1.0 exactly — without
+    # it, anchor "128 128 128" yields y=127.999… and misses the boundary.
     print (y > 127 ? dark : light)
   }'
 }
