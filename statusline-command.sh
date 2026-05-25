@@ -1,7 +1,8 @@
 #!/bin/sh
-# Claude Code status line - two-line display
-# Line 1: folder + model + git + active tools
-# Line 2: context %, 5h limit, 7d limit
+# Claude Code status line — width-adaptive 3-line display.
+# Line 1: dir + model pill + git + memory/boot/skip overlay
+# Line 2: ctx + 5h + 7d bars
+# Line 3: turn-rate sparkline (full + medium modes; narrow drops it)
 #
 # All usage data comes from Claude Code stdin (see
 # https://code.claude.com/docs/en/statusline). rate_limits is absent until
@@ -340,6 +341,9 @@ if [ -n "$seven_d" ]; then
   fi
   parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
 fi
+# $parts is used AS the printf FORMAT string — format_pct must emit %%%% (not %)
+# for literal %, and \033 literals (not real ESC) for ANSI escapes, so this
+# outer printf converts them. Do NOT add bare %s/%d to format_pct's output.
 [ -n "$parts" ] && printf "${parts}\n"
 
 # --- Line 3: turn-rate sparkline (full + medium only) ---
