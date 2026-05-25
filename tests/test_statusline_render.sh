@@ -424,5 +424,34 @@ LOG
     || bad "full mode: turn label on line 3"
 fi
 
+# ─── statusline-command.sh integration: medium mode ───────────────────────
+if [ -f "$SL" ]; then
+  out=$(COLUMNS=72 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+
+  lc=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  [ "$lc" = "3" ] && ok "medium mode: still 3 lines (sparkline kept)" \
+    || bad "medium mode: still 3 lines (sparkline kept)" "got $lc; out: $out"
+
+  # Medium mode drops the "turn" / "last" / "peak" labels on line 3.
+  if echo "$out" | sed -n '3p' | grep -q 'last\|peak'; then
+    bad "medium mode: drops 'last'/'peak' labels"
+  else
+    ok "medium mode: drops 'last'/'peak' labels"
+  fi
+
+  # But the sparkline glyphs are still there.
+  echo "$out" | sed -n '3p' | grep -qE '[▁▂▃▄▅▆▇█]' \
+    && ok "medium mode: sparkline glyphs still present" \
+    || bad "medium mode: sparkline glyphs still present"
+
+  # Bar width drops 10 → 6 (count ▓+░ on the ctx segment).
+  # ctx pct in fixture is 12 → 12*6/100 = 0.72 → 1 filled, 5 empty.
+  ctx_line=$(echo "$out" | sed -n '2p')
+  bar_chars=$(echo "$ctx_line" | grep -oE '[▓░]' | wc -l | tr -d ' ')
+  # Total bar chars across ctx + 5h + 7d in medium mode = 6 + 6 + 6 = 18.
+  [ "$bar_chars" = "18" ] && ok "medium mode: bar width = 6 per segment (18 total)" \
+    || bad "medium mode: bar width = 6 per segment" "got $bar_chars"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
