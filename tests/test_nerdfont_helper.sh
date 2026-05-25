@@ -18,19 +18,23 @@ bad() { printf 'FAIL  %s\n' "$1"; fail=$((fail+1)); }
 
 type _mp_have_nerdfont >/dev/null 2>&1 && ok "_mp_have_nerdfont defined" || bad "_mp_have_nerdfont defined"
 
-# Env override: explicit 1/true/yes returns 0
+# Env override: explicit 1/true/yes returns 0 with no stdout
 for v in 1 true yes; do
+  out=$(MEMORY_PACK_NERDFONT="$v" _mp_have_nerdfont 2>/dev/null)
   MEMORY_PACK_NERDFONT="$v" _mp_have_nerdfont 2>/dev/null \
     && ok "env=$v returns 0" || bad "env=$v returns 0"
+  [ -z "$out" ] && ok "env=$v no stdout" || bad "env=$v no stdout (got: '$out')"
 done
 
-# Env override: explicit 0/false/no returns 1
+# Env override: explicit 0/false/no returns 1 with no stdout
 for v in 0 false no; do
+  out=$(MEMORY_PACK_NERDFONT="$v" _mp_have_nerdfont 2>/dev/null)
   if MEMORY_PACK_NERDFONT="$v" _mp_have_nerdfont 2>/dev/null; then
     bad "env=$v returns 1"
   else
     ok "env=$v returns 1"
   fi
+  [ -z "$out" ] && ok "env=$v no stdout" || bad "env=$v no stdout (got: '$out')"
 done
 
 # Empty env: falls through to fc-list probe. We don't assert the outcome
