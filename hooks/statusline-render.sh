@@ -67,9 +67,11 @@ mp_gradient_color() {
 
 # mp_sparkline_data: read a token-rate log (<epoch> <sid> <cum_tokens>),
 # filter by session_id, compute deltas between consecutive cumulative
-# samples, take the last 16 deltas. Output a single line of space-separated
-# decimal deltas. Empty output if the log is missing, the session has fewer
-# than 2 samples, or no positive delta exists.
+# samples (clamping negative deltas to 0), take the last 16. Output a
+# single line of space-separated decimal deltas. Empty output if the log
+# is missing or the session has fewer than 2 samples. Note: a session
+# with all-equal samples emits a row of "0"s, not empty — mp_sparkline_render
+# handles ratio=0 as the min glyph.
 mp_sparkline_data() {
   log="$1"
   sid="$2"
