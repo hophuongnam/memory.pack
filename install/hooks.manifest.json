@@ -11,6 +11,7 @@
     { "event": "PostToolUse",      "matcher": "MultiEdit","script": "memory-index-update.sh",   "timeout": 3  },
     { "event": "SessionEnd",                             "script": "session-end.sh",            "timeout": 5  },
     { "event": "SessionEnd",                             "script": "memory-index-reconcile.sh", "timeout": 5  },
-    { "event": "Stop",                                   "script": "auto-save-stop.sh",         "timeout": 30 }
+    { "event": "Stop",                                   "script": "auto-save-stop.sh",         "timeout": 30 },
+    { "event": "Stop",                                   "script": "log-token-rate.sh",         "timeout": 5  }
   ]
 }

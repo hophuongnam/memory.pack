@@ -8,7 +8,7 @@
 # What it does (all idempotent):
 #   1. preflight deps (bash git python3 jq sqlite3 node)
 #   2. copy the engine to $PREFIX (no .git, no runtime state, no search.db)
-#   3. merge the 11 hook registrations into ~/.claude/settings.json and set
+#   3. merge the 12 hook registrations into ~/.claude/settings.json and set
 #      env.MEMORY_PACK_HOME=$PREFIX  (foreign hooks/keys untouched; backup)
 #   4. append a SCHEMA.md pointer to ~/.claude/CLAUDE.md (once)
 #   5. preflight the claude-agent-sdk (replay); --with-sdk installs it
@@ -98,6 +98,7 @@ EXCL=(
   --exclude 'index/search.db' --exclude 'index/search.db-*'
   --exclude '.boot-context-*' --exclude '.boot-marker-*'
   --exclude '.replay-*' --exclude '.skip-replay-*'
+  --exclude 'statusline-token-rate.log'
 )
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete-excluded "${EXCL[@]}" "$SELF_DIR"/ "$PREFIX"/
@@ -107,7 +108,8 @@ else
       --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
       --exclude='index/search.db' --exclude='index/search.db-*' \
       --exclude='.boot-context-*' --exclude='.boot-marker-*' \
-      --exclude='.replay-*' --exclude='.skip-replay-*' -cf - . ) \
+      --exclude='.replay-*' --exclude='.skip-replay-*' \
+      --exclude='statusline-token-rate.log' -cf - . ) \
     | ( cd "$PREFIX" && tar -xf - )
 fi
 chmod +x "$PREFIX"/hooks/*.sh "$PREFIX"/hooks/*.mjs "$PREFIX"/index/*.py \
@@ -138,7 +140,7 @@ tmp="$(mktemp)"
 "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" "${SL_MERGE[@]+"${SL_MERGE[@]}"}" < "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "merge produced invalid JSON — $SETTINGS untouched (backup: $SETTINGS.mp-bak)"; }
 mv "$tmp" "$SETTINGS"
-say "merged 11 Memory.Pack hooks + env.MEMORY_PACK_HOME${SL_MERGE[0]:+ + .statusLine} into $SETTINGS (backup: $SETTINGS.mp-bak)"
+say "merged 12 Memory.Pack hooks + env.MEMORY_PACK_HOME${SL_MERGE[0]:+ + .statusLine} into $SETTINGS (backup: $SETTINGS.mp-bak)"
 
 # ---- 4. CLAUDE.md pointer (idempotent) -------------------------------
 PTR="See \`$PREFIX/SCHEMA.md\` for the canonical auto-memory schema (Memory.Pack)."
@@ -176,3 +178,4 @@ MEMORY_PACK_HOME="$PREFIX" python3 "$PREFIX/index/index-memories.py" --rebuild |
 
 say "done. Memory.Pack installed at $PREFIX"
 say "open a new Claude Code session to load the hooks. Uninstall: $PREFIX/install.sh --uninstall"
+say "  Tip: install a Nerd Font (https://www.nerdfonts.com/) for the icon-rich statusline."

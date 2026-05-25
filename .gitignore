@@ -5,6 +5,7 @@ hooks/.replay-pid-*
 hooks/.replay-error-*
 index/search.db
 index/search.db-*
+statusline-token-rate.log
 __pycache__/
 *.pyc
 

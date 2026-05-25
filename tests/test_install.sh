@@ -59,9 +59,9 @@ if find "$PREFIX" -name 'search.db' -path '*/index/*' -newer "$SRC/install.sh" >
    && [ -f "$PREFIX/index/search.db" ]; then ok "search.db is freshly built, not shipped"; else
    [ -f "$PREFIX/index/search.db" ] && ok "search.db is freshly built, not shipped" || bad "search.db built"; fi
 
-# settings merged: 11 MP entries w/ prefix, foreign survives, env set
+# settings merged: 12 MP entries w/ prefix, foreign survives, env set
 mp=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp" = "11" ] && ok "settings.json: 11 MP entries with prefix" || bad "11 MP entries" "got $mp"
+[ "$mp" = "12" ] && ok "settings.json: 12 MP entries with prefix" || bad "12 MP entries" "got $mp"
 jq -e '.hooks.PreToolUse[]?.hooks[]?|select(.command=="/foreign/x.sh")' "$FH/.claude/settings.json" >/dev/null \
   && ok "settings.json: foreign hook survived" || bad "foreign hook survived"
 jq -e '.env.MEMORY_PACK_HOME=="'"$PREFIX"'" and .theme=="dark"' "$FH/.claude/settings.json" >/dev/null \
@@ -88,7 +88,7 @@ grep -q "$PREFIX/SCHEMA.md" "$FH/.claude/CLAUDE.md" && grep -q 'existing user co
 # --- idempotent ---
 run --prefix "$PREFIX" --yes >/dev/null 2>&1
 mp2=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp2" = "11" ] && ok "idempotent re-install (still 11, not 22)" || bad "idempotent re-install" "got $mp2"
+[ "$mp2" = "12" ] && ok "idempotent re-install (still 12, not 24)" || bad "idempotent re-install" "got $mp2"
 { [ -L "$SL_LINK" ] && [ "$(readlink "$SL_LINK")" = "$PREFIX/statusline-command.sh" ]; } \
   && ok "statusline: symlink stable after idempotent re-install" || bad "statusline: symlink stable on re-install"
 
