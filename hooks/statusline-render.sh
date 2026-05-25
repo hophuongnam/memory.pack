@@ -25,3 +25,39 @@ mp_pill_fg() {
     print (y > 127 ? dark : light)
   }'
 }
+
+# mp_gradient_color: given a ratio t ∈ [0,1], interpolate THEME_GRAD_STOPS
+# linearly between the two flanking stops and print "R G B". Clamps t to
+# [0,1]. Stops format: "<t>:R,G,B <t>:R,G,B …" sorted ascending by t.
+mp_gradient_color() {
+  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" '
+    BEGIN {
+      n = split(stops, parts, " ")
+      for (i = 1; i <= n; i++) {
+        split(parts[i], kv, ":")
+        st[i] = kv[1] + 0
+        split(kv[2], rgb, ",")
+        sr[i] = rgb[1] + 0
+        sg[i] = rgb[2] + 0
+        sb[i] = rgb[3] + 0
+      }
+      nstops = n
+    }
+    {
+      t = $1 + 0
+      if (t <= 0)      { printf "%d %d %d", sr[1], sg[1], sb[1]; exit }
+      if (t >= 1)      { printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]; exit }
+      for (i = 1; i < nstops; i++) {
+        if (t >= st[i] && t <= st[i+1]) {
+          span = st[i+1] - st[i]
+          u    = (span > 0) ? (t - st[i]) / span : 0
+          r    = int(sr[i] + (sr[i+1] - sr[i]) * u + 0.5)
+          g    = int(sg[i] + (sg[i+1] - sg[i]) * u + 0.5)
+          b    = int(sb[i] + (sb[i+1] - sb[i]) * u + 0.5)
+          printf "%d %d %d", r, g, b
+          exit
+        }
+      }
+      printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]
+    }'
+}

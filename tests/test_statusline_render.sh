@@ -140,5 +140,45 @@ if [ -f "$RENDER" ]; then
   [ "$fg" = "235 235 235" ] && ok "Y=100 below threshold picks light" || bad "Y=100 below threshold picks light" "got '$fg'"
 fi
 
+# ─── mp_gradient_color interpolation ──────────────────────────────────────
+if [ -f "$RENDER" ]; then
+  grad_color_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_gradient_color "$5"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1"
+  }
+
+  # Stop boundaries: at t=0.00 → first stop (40 210 80)
+  c=$(grad_color_for 0.00)
+  [ "$c" = "40 210 80" ] && ok "gradient t=0.00 hits first stop" || bad "gradient t=0.00 hits first stop" "got '$c'"
+
+  # At t=1.00 → last stop (170 60 210)
+  c=$(grad_color_for 1.00)
+  [ "$c" = "170 60 210" ] && ok "gradient t=1.00 hits last stop" || bad "gradient t=1.00 hits last stop" "got '$c'"
+
+  # At t=0.25 → second stop exact (240 230 20)
+  c=$(grad_color_for 0.25)
+  [ "$c" = "240 230 20" ] && ok "gradient t=0.25 hits second stop" || bad "gradient t=0.25 hits second stop" "got '$c'"
+
+  # Halfway between 0.00 (40,210,80) and 0.25 (240,230,20):
+  # t=0.125; u=0.5 → r=(40+240)/2=140, g=(210+230)/2=220, b=(80+20)/2=50
+  c=$(grad_color_for 0.125)
+  [ "$c" = "140 220 50" ] && ok "gradient mid-interpolation correct" || bad "gradient mid-interpolation correct" "got '$c'"
+
+  # Halfway between 0.25 (240,230,20) and 0.50 (255,140,20):
+  # t=0.375; u=0.5 → r=(240+255)/2=247.5→248, g=(230+140)/2=185, b=(20+20)/2=20
+  # Pins the SECOND segment, so an off-by-one in the segment-loop counter would fail
+  # this even though stop-boundary tests still pass.
+  c=$(grad_color_for 0.375)
+  [ "$c" = "248 185 20" ] && ok "gradient second-segment interpolation correct" || bad "gradient second-segment interpolation correct" "got '$c'"
+
+  # Clamp: t < 0 → first stop
+  c=$(grad_color_for "-0.5")
+  [ "$c" = "40 210 80" ] && ok "gradient clamps t<0 to first" || bad "gradient clamps t<0 to first" "got '$c'"
+
+  # Clamp: t > 1 → last stop
+  c=$(grad_color_for "1.5")
+  [ "$c" = "170 60 210" ] && ok "gradient clamps t>1 to last" || bad "gradient clamps t>1 to last" "got '$c'"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
