@@ -15,3 +15,6 @@ __pycache__/
 # Per-project vibe-coding-method tag read by statusline-command.sh
 # ($project_dir/vibeCodingMethod) — user/workspace-local, not engine content
 vibeCodingMethod
+
+# Superpowers brainstorming session artifacts (mockups + state)
+.superpowers/
