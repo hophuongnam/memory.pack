@@ -530,7 +530,7 @@ Expected: `ALL PASS`.
 
 Temporarily change `y >= 128` to `y >= 200` in `mp_pill_fg`. Re-run.
 
-Expected: FAIL with `Y=128 boundary picks dark` and `opus anchor → dark fg` failing (their Y ≈ 128 and 211.6 both fall below the bumped threshold).
+Expected: FAIL with `Y=128 boundary picks dark` failing (Y≈128 falls below the bumped 200 threshold). Opus Y≈211.6 still passes because it exceeds 200 — that's fine, the boundary test alone proves teeth.
 
 Revert. Re-run. Expected: `ALL PASS`.
 

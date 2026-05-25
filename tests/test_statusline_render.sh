@@ -132,6 +132,12 @@ if [ -f "$RENDER" ]; then
   # Opus anchor (255 216 77) → Y = 0.299*255 + 0.587*216 + 0.114*77 ≈ 211.6 → dark
   fg=$(pill_fg_for "255 216 77")
   [ "$fg" = "15 15 15" ] && ok "opus anchor → dark fg" || bad "opus anchor → dark fg" "got '$fg'"
+
+  # Just below threshold (Y=100) → light. Pins the light branch close to the
+  # boundary so downward threshold drift (e.g. y > 50) gets caught — without
+  # this, the threshold could slide from 128 down to 1 and no test would fire.
+  fg=$(pill_fg_for "100 100 100")
+  [ "$fg" = "235 235 235" ] && ok "Y=100 below threshold picks light" || bad "Y=100 below threshold picks light" "got '$fg'"
 fi
 
 echo "----"
