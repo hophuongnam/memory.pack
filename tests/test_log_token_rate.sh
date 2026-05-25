@@ -14,7 +14,7 @@ ok()  { printf 'PASS  %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
 
 [ -f "$HOOK" ] || { echo "FAIL  hooks/log-token-rate.sh missing"; exit 1; }
-[ -x "$HOOK" ] || bad "hook has +x mode"
+[ -x "$HOOK" ] || bad "hook must have +x mode"
 
 # Sandbox a HOME so the hook writes to a temp log.
 SBX=$(mktemp -d); trap 'rm -rf "$SBX"' EXIT

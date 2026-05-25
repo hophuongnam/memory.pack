@@ -5,6 +5,8 @@ hooks/.replay-pid-*
 hooks/.replay-error-*
 index/search.db
 index/search.db-*
+# statusline-token-rate.log lives in ~/.claude/ (hooks/log-token-rate.sh writes
+# it there). Ignored at repo root as a safety net against accidental relocation.
 statusline-token-rate.log
 __pycache__/
 *.pyc

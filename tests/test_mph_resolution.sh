@@ -69,6 +69,10 @@ rm -rf "$WT/index/__pycache__" 2>/dev/null || true
 #      excludes the exact same set from the package). Their replay-summary
 #      prose can quote the project path verbatim, which says nothing about
 #      source. Mirror that EXCL list so the scan stays source-only.
+#   3. statusline-token-rate.log — written to ~/.claude/, never in the source
+#      tree. The exclude is parity-mirror with install.sh's EXCL, not a
+#      source-path filter — guards the hypothetical case where a user runs
+#      install from inside ~/.claude/ or relocates the log.
 HITS=$(grep -rnI --exclude-dir=__pycache__ \
   --exclude='.boot-context-*' --exclude='.boot-marker-*' \
   --exclude='.replay-*' --exclude='.skip-replay-*' \
