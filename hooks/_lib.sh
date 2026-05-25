@@ -88,3 +88,19 @@ _mp_resolve_project_key() {
   done
   printf '%s' "$_mp_fallback"
 }
+
+# _mp_have_nerdfont: returns 0 if a Nerd Font is available for the statusline
+# icon set, 1 otherwise. Env override MEMORY_PACK_NERDFONT={1,true,yes} forces
+# yes, MEMORY_PACK_NERDFONT={0,false,no} forces no, empty/unset falls through
+# to `fc-list :family | grep -qi 'nerd'`. Used by hooks/statusline-icons.sh to
+# pick the glyph table. fc-list is part of fontconfig (Linux: usually present;
+# macOS: present via Homebrew or system Cairo); absent → returns 1 (Unicode
+# fallback wins). Never prints to stdout.
+_mp_have_nerdfont() {
+  case "${MEMORY_PACK_NERDFONT:-}" in
+    1|true|yes) return 0 ;;
+    0|false|no) return 1 ;;
+  esac
+  command -v fc-list >/dev/null 2>&1 || return 1
+  fc-list :family 2>/dev/null | grep -qi 'nerd'
+}
