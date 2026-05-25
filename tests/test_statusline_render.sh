@@ -60,5 +60,36 @@ gs=$(sh -c '. "$1" && printf "%s" "$THEME_GRAD_STOPS"' _ "$THEME")
 echo "$gs" | grep -qE '^([01]\.[0-9]+:[0-9]+,[0-9]+,[0-9]+( |$))+$' \
   && ok "THEME_GRAD_STOPS well-formed" || bad "THEME_GRAD_STOPS well-formed" "got: $gs"
 
+# ─── icons schema + Nerd Font selection ───────────────────────────────────
+ICONS="$HOOKS/statusline-icons.sh"
+[ -f "$ICONS" ] || bad "hooks/statusline-icons.sh exists"
+
+if [ -f "$ICONS" ]; then
+  # Source-time silence contract (both modes — invariant against stray echo
+  # in either branch of the if/else).
+  for mode in 1 0; do
+    icons_out=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT="$3" . "$4" 2>&1' _ "$HOOKS/_lib.sh" "$THEME" "$mode" "$ICONS")
+    [ -z "$icons_out" ] && ok "icons sources silently (NERDFONT=$mode)" || bad "icons sources silently (NERDFONT=$mode)" "got: $icons_out"
+  done
+
+  # With Nerd Font forced on, ICON_BRANCH should be the Nerd glyph (E0A0 = ).
+  # With Nerd Font forced off, ICON_BRANCH should be the Unicode fallback ().
+  ICON_BRANCH_NERD=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "$ICON_BRANCH"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
+  ICON_BRANCH_UNI=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=0 . "$3" && printf "%s" "$ICON_BRANCH"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
+
+  [ -n "$ICON_BRANCH_NERD" ] && ok "ICON_BRANCH set with Nerd Font on" || bad "ICON_BRANCH set with Nerd Font on"
+  [ -n "$ICON_BRANCH_UNI" ]  && ok "ICON_BRANCH set with Nerd Font off" || bad "ICON_BRANCH set with Nerd Font off"
+  [ "$ICON_BRANCH_NERD" != "$ICON_BRANCH_UNI" ] \
+    && ok "ICON_BRANCH differs between Nerd/Unicode tables" \
+    || bad "ICON_BRANCH differs between Nerd/Unicode tables" "both: '$ICON_BRANCH_NERD'"
+
+  # Every expected ICON_* var must be set under at least one mode.
+  for icon in ICON_BRANCH ICON_DIRTY ICON_PWD ICON_MEMORY ICON_BOOT_OK ICON_BOOT_PENDING \
+              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE; do
+    val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
+    [ -n "$val" ] && ok "$icon exports under Nerd Font" || bad "$icon exports under Nerd Font"
+  done
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
