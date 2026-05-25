@@ -64,3 +64,86 @@ mp_gradient_color() {
       printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]
     }'
 }
+
+# mp_sparkline_data: read a token-rate log (<epoch> <sid> <cum_tokens>),
+# filter by session_id, compute deltas between consecutive cumulative
+# samples, take the last 16 deltas. Output a single line of space-separated
+# decimal deltas. Empty output if the log is missing, the session has fewer
+# than 2 samples, or no positive delta exists.
+mp_sparkline_data() {
+  log="$1"
+  sid="$2"
+  [ -f "$log" ] || return 0
+  awk -v sid="$sid" '
+    $2 == sid {
+      cur = $3 + 0
+      if (NR_seen++ >= 1) {
+        d = cur - prev
+        if (d < 0) d = 0
+        deltas[++count] = d
+      }
+      prev = cur
+    }
+    END {
+      start = (count > 16) ? count - 16 + 1 : 1
+      out = ""
+      for (i = start; i <= count; i++) {
+        out = (out == "") ? deltas[i] : out " " deltas[i]
+      }
+      if (out != "") print out
+    }
+  ' "$log"
+}
+
+# mp_sparkline_render: given a space-separated list of non-negative deltas,
+# render an ANSI sparkline using the 8 block-height glyphs ▁▂▃▄▅▆▇█. Each
+# bar's height is scaled against the max delta in the list; each bar's color
+# comes from mp_gradient_color at the same ratio. Empty input → empty out.
+mp_sparkline_render() {
+  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" '
+    BEGIN {
+      glyph[1] = "▁"; glyph[2] = "▂"; glyph[3] = "▃"; glyph[4] = "▄"
+      glyph[5] = "▅"; glyph[6] = "▆"; glyph[7] = "▇"; glyph[8] = "█"
+      ns = split(stops, parts, " ")
+      for (i = 1; i <= ns; i++) {
+        split(parts[i], kv, ":")
+        st[i] = kv[1] + 0
+        split(kv[2], rgb, ",")
+        sr[i] = rgb[1] + 0; sg[i] = rgb[2] + 0; sb[i] = rgb[3] + 0
+      }
+    }
+    {
+      n = NF
+      if (n == 0) exit
+      mx = 0
+      for (i = 1; i <= n; i++) { v = $i + 0; if (v > mx) mx = v }
+      out = ""
+      for (i = 1; i <= n; i++) {
+        v = $i + 0
+        ratio = (mx > 0) ? v / mx : 0
+        # Glyph index: bars of height 0 → ▁ (idx 1); ratio 1 → █ (idx 8).
+        idx = int(ratio * 7) + 1
+        if (idx > 8) idx = 8
+        if (idx < 1) idx = 1
+        # Gradient color at the same ratio.
+        r = sr[ns]; g = sg[ns]; b = sb[ns]
+        if (ratio <= 0)      { r = sr[1];  g = sg[1];  b = sb[1] }
+        else if (ratio >= 1) { r = sr[ns]; g = sg[ns]; b = sb[ns] }
+        else {
+          for (j = 1; j < ns; j++) {
+            if (ratio >= st[j] && ratio <= st[j+1]) {
+              span = st[j+1] - st[j]
+              u    = (span > 0) ? (ratio - st[j]) / span : 0
+              r    = int(sr[j] + (sr[j+1] - sr[j]) * u + 0.5)
+              g    = int(sg[j] + (sg[j+1] - sg[j]) * u + 0.5)
+              b    = int(sb[j] + (sb[j+1] - sb[j]) * u + 0.5)
+              break
+            }
+          }
+        }
+        out = out sprintf("\033[38;2;%d;%d;%dm%s\033[0m", r, g, b, glyph[idx])
+      }
+      print out
+    }
+  '
+}

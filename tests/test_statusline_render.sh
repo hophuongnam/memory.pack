@@ -198,5 +198,123 @@ if [ -f "$RENDER" ]; then
   [ "$c" = "170 60 210" ] && ok "gradient clamps t>1 to last" || bad "gradient clamps t>1 to last" "got '$c'"
 fi
 
+# ─── mp_sparkline_data + mp_sparkline_render ──────────────────────────────
+if [ -f "$RENDER" ]; then
+  TMPLOG=$(mktemp)
+  trap 'rm -f "$TMPLOG"' EXIT
+  # Format: <epoch> <session_id> <cum_tokens>
+  cat > "$TMPLOG" <<'LOG'
+1779700000 sid-A 100
+1779700060 sid-A 250
+1779700120 sid-A 600
+1779700180 sid-A 700
+1779700240 sid-B 50000
+1779700300 sid-A 1200
+LOG
+
+  sparkline_data_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_sparkline_data "$5" "$6"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1" "$2"
+  }
+
+  # sid-A has 4 cum samples (100, 250, 600, 700, 1200 — wait, 5).
+  # Deltas: 250-100=150, 600-250=350, 700-600=100, 1200-700=500.
+  # 4 deltas total.
+  deltas=$(sparkline_data_for "$TMPLOG" "sid-A")
+  [ "$deltas" = "150 350 100 500" ] && ok "sparkline data: sid-A 4 deltas" \
+    || bad "sparkline data: sid-A 4 deltas" "got '$deltas'"
+
+  # sid-B has 1 sample → 0 deltas (need ≥2 samples for a delta).
+  deltas=$(sparkline_data_for "$TMPLOG" "sid-B")
+  [ -z "$deltas" ] && ok "sparkline data: sid-B no deltas (1 sample)" \
+    || bad "sparkline data: sid-B no deltas" "got '$deltas'"
+
+  # Missing log file → empty output, no error.
+  if deltas=$(sparkline_data_for "/nonexistent/log" "sid-A" 2>&1); then
+    [ -z "$deltas" ] && ok "sparkline data: missing log → empty" \
+      || bad "sparkline data: missing log → empty" "got '$deltas'"
+  else
+    bad "sparkline data: missing log doesn't error" "exit nonzero"
+  fi
+
+  # Render: given known deltas, output non-empty ANSI string with 4 bars.
+  sparkline_render_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_sparkline_render "$5"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1"
+  }
+  rendered=$(sparkline_render_for "150 350 100 500")
+  [ -n "$rendered" ] && ok "sparkline render: non-empty for 4 deltas" \
+    || bad "sparkline render: non-empty for 4 deltas"
+  echo "$rendered" | grep -q $'\033\[38;2;' \
+    && ok "sparkline render: contains truecolor ANSI" \
+    || bad "sparkline render: contains truecolor ANSI"
+  # Max delta is 500 → final bar should be at ratio 1.0 (last gradient stop:
+  # purple 170,60,210). Look for that exact RGB in output.
+  echo "$rendered" | grep -q '38;2;170;60;210' \
+    && ok "sparkline render: max bar uses last gradient stop" \
+    || bad "sparkline render: max bar uses last gradient stop" "got: '$rendered'"
+
+  # Min bar (only positive delta is 0) → still emits something (glyph idx 1
+  # = ▁). Pins ratio=0 → glyph[1] mapping; a regression that defaults to
+  # glyph[8] (full block) for zero-height would emit a block here.
+  rendered=$(sparkline_render_for "0 100 0 100")
+  echo "$rendered" | grep -q '▁' \
+    && ok "sparkline render: zero deltas emit min glyph" \
+    || bad "sparkline render: zero deltas emit min glyph" "got: '$rendered'"
+
+  # All-equal non-zero deltas → ratio=1 for every bar → max glyph + last
+  # gradient stop color across the line. Pins the all-max case.
+  rendered=$(sparkline_render_for "50 50 50")
+  echo "$rendered" | grep -q '█' \
+    && ok "sparkline render: all-equal deltas → max glyph" \
+    || bad "sparkline render: all-equal deltas → max glyph" "got: '$rendered'"
+
+  # 16-delta cap: log with 20 samples of sid-C, should output exactly 19 deltas
+  # truncated to the last 16. (Verifies the start = count - 16 + 1 formula.)
+  cat >> "$TMPLOG" <<'LOG2'
+1779800001 sid-C 100
+1779800002 sid-C 200
+1779800003 sid-C 300
+1779800004 sid-C 400
+1779800005 sid-C 500
+1779800006 sid-C 600
+1779800007 sid-C 700
+1779800008 sid-C 800
+1779800009 sid-C 900
+1779800010 sid-C 1000
+1779800011 sid-C 1100
+1779800012 sid-C 1200
+1779800013 sid-C 1300
+1779800014 sid-C 1400
+1779800015 sid-C 1500
+1779800016 sid-C 1600
+1779800017 sid-C 1700
+1779800018 sid-C 1800
+1779800019 sid-C 1900
+1779800020 sid-C 2000
+LOG2
+  deltas=$(sparkline_data_for "$TMPLOG" "sid-C")
+  # 20 samples → 19 deltas; capped at 16. Each delta is exactly 100 (all same).
+  count_deltas=$(printf '%s' "$deltas" | awk '{print NF}')
+  [ "$count_deltas" = "16" ] && ok "sparkline data: cap at 16 deltas" \
+    || bad "sparkline data: cap at 16 deltas" "got count=$count_deltas, deltas='$deltas'"
+
+  # Negative delta (cum count went DOWN — shouldn't happen but data could be
+  # corrupted) → clamped to 0, doesn't propagate negative bar.
+  cat >> "$TMPLOG" <<'LOG3'
+1779900001 sid-D 1000
+1779900002 sid-D 500
+1779900003 sid-D 800
+LOG3
+  deltas=$(sparkline_data_for "$TMPLOG" "sid-D")
+  [ "$deltas" = "0 300" ] && ok "sparkline data: negative delta clamped to 0" \
+    || bad "sparkline data: negative delta clamped to 0" "got '$deltas'"
+
+  # Empty input → empty output.
+  rendered=$(sparkline_render_for "")
+  [ -z "$rendered" ] && ok "sparkline render: empty input → empty" \
+    || bad "sparkline render: empty input → empty" "got '$rendered'"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
