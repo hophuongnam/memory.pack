@@ -149,3 +149,17 @@ mp_sparkline_render() {
     }
   '
 }
+
+# mp_width_mode: given a column count, print "full" (> 80), "medium"
+# (56-80), or "narrow" (≤ 55). Boundaries chosen to match YAS conventions
+# (80 = classic terminal width, 55 = comfortable split-pane).
+mp_width_mode() {
+  cols="${1:-80}"
+  if [ "$cols" -gt 80 ] 2>/dev/null; then
+    printf 'full'
+  elif [ "$cols" -ge 56 ] 2>/dev/null; then
+    printf 'medium'
+  else
+    printf 'narrow'
+  fi
+}

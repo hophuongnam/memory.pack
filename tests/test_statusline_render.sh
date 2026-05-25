@@ -316,5 +316,29 @@ LOG3
     || bad "sparkline render: empty input → empty" "got '$rendered'"
 fi
 
+# ─── mp_width_mode threshold logic ────────────────────────────────────────
+if [ -f "$RENDER" ]; then
+  width_mode_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_width_mode "$5"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1"
+  }
+
+  [ "$(width_mode_for 200)" = "full" ]   && ok "cols=200 → full"   || bad "cols=200 → full"
+  [ "$(width_mode_for 81)"  = "full" ]   && ok "cols=81 → full"    || bad "cols=81 → full"
+  [ "$(width_mode_for 80)"  = "medium" ] && ok "cols=80 → medium"  || bad "cols=80 → medium"
+  [ "$(width_mode_for 56)"  = "medium" ] && ok "cols=56 → medium"  || bad "cols=56 → medium"
+  [ "$(width_mode_for 55)"  = "narrow" ] && ok "cols=55 → narrow"  || bad "cols=55 → narrow"
+  [ "$(width_mode_for 1)"   = "narrow" ] && ok "cols=1 → narrow"   || bad "cols=1 → narrow"
+
+  # Empty/missing arg → defaults to 80 → medium. Pins the `${1:-80}` default.
+  [ "$(width_mode_for "")" = "medium" ] && ok "empty cols → default 80 → medium" || bad "empty cols → default 80 → medium"
+
+  # Non-numeric input → numeric comparison fails → falls through to narrow.
+  # The 2>/dev/null on the [ -gt ] keeps it silent. Pins the error-tolerant
+  # path so a future "fix" that removes the redirect doesn't surface noise.
+  out=$(width_mode_for "garbage" 2>&1)
+  [ "$out" = "narrow" ] && ok "non-numeric cols → narrow, silent" || bad "non-numeric cols → narrow, silent" "got '$out'"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
