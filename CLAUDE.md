@@ -26,11 +26,11 @@ This project owns its development (relocated out of the Management project
 
 ## Architecture
 
-**11 hook registrations** (canonical list: `install/hooks.manifest.json`):
+**12 hook registrations** (canonical list: `install/hooks.manifest.json`):
 `SessionStart`→boot-inject; `UserPromptSubmit`→boot-inject + memory-search-inject;
-`SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop;
-`PostToolUse` Read→memory-recall, Write→archive-resurrect + memory-index-update,
-Edit/MultiEdit→memory-index-update.
+`SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
+log-token-rate; `PostToolUse` Read→memory-recall, Write→archive-resurrect +
+memory-index-update, Edit/MultiEdit→memory-index-update.
 
 **Two-pass replay** (`hooks/replay.mjs`, detached by `session-end.sh` via
 `nohup`/`disown`; model `claude-sonnet-4-6`, `maxTurns:6`, `tools:[]`):
@@ -90,8 +90,9 @@ project store — types, frontmatter, decay model. No per-project copy.
    parent's store). Mirrored in `statusline-command.sh` for invariant #2;
    `test_slug_anchored_to_transcript_path` pins all three sites.
 5. **Runtime state is never packaged.** `.boot-context-*`, `.boot-marker-*`,
-   `.replay-*`, `.skip-replay-*`, `search.db` are derived/ephemeral
-   (`.gitignore` + `install.sh` EXCL + the test scan must all agree).
+   `.replay-*`, `.skip-replay-*`, `search.db`, `statusline-token-rate.log`
+   are derived/ephemeral (`.gitignore` + `install.sh` EXCL + the test scan
+   must all agree).
 
 ## Portability
 
@@ -117,7 +118,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-11 suites in `tests/` — run all before any commit:
+14 suites in `tests/` — run all before any commit:
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -150,7 +151,23 @@ loads a parent-hash boot-context when cwd is a subfolder, and a value
 mutation where parent context wins over a sibling subfolder context;
 guards the writer↔CC path-parity analog of invariant #4, the
 silent-amnesia mode that split Pre.Audit's boot-contexts across
-Green.World/ACPay/Red.Sunrise subfolder hashes). Two accepted
+Green.World/ACPay/Red.Sunrise subfolder hashes),
+`test_nerdfont_helper` (`_mp_have_nerdfont` env override + fc-list probe;
+must produce NO stdout on every branch — silent-amnesia analog because
+the helper is sourced by `statusline-icons.sh`),
+`test_log_token_rate` (Stop hook `log-token-rate.sh`: happy/race-lost/
+empty/missing/snake↔camel paths + multi-turn fixture asserts last
+assistant `.message.usage` wins + malformed-JSONL doesn't crash;
+cumulative tokens are sum of all 4 fields so a dropped subfield kills
+4 assertions),
+`test_statusline_render` (the renderer cluster: theme + icons + render
+helpers + statusline-command.sh integration. 118 assertions covering
+source-time silence on every sourced helper, ICON_* existence in both
+Nerd/Unicode tables, `mp_pill_fg` luminance flip with mid-boundary
+coverage, `mp_gradient_color` interpolation across all 4 segments,
+`mp_sparkline_data` 16-cap + negative-clamp, full/medium/narrow render
+output line counts + bar widths + sparkline glyph presence + boot
+indicator preservation across all width modes). Two accepted
 patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
