@@ -68,6 +68,10 @@ PREFIX="$TMP/.memory-pack"
 mkdir -p "$PREFIX/hooks" "$TMP/fake-claude"
 cp "$SL" "$PREFIX/statusline-command.sh"
 chmod +x "$PREFIX/statusline-command.sh"
+# Copy render helpers so the relocated statusline-command.sh can source them.
+for _f in _lib.sh statusline-theme.sh statusline-icons.sh statusline-render.sh; do
+  cp "$HERE/../hooks/$_f" "$PREFIX/hooks/"
+done
 LINK="$TMP/fake-claude/statusline-command.sh"
 ln -s "$PREFIX/statusline-command.sh" "$LINK"      # absolute target, like install.sh
 

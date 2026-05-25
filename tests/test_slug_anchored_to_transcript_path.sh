@@ -162,6 +162,11 @@ chmod +x "$SL_PREFIX/statusline-command.sh"
 # hooks/ sibling for self-location to land in
 mkdir -p "$SL_PREFIX/hooks"
 cp "$ENGINE/hooks/.boot-context-${PARENT_HASH}" "$SL_PREFIX/hooks/" 2>/dev/null || true
+# Copy render helpers so the relocated statusline-command.sh can source them.
+# (These live in the real hooks/ — not in $ENGINE which is a minimal fixture.)
+for _f in _lib.sh statusline-theme.sh statusline-icons.sh statusline-render.sh; do
+  cp "$HERE/../hooks/$_f" "$SL_PREFIX/hooks/"
+done
 # Place the skip-replay sentinel at the PARENT hash (what hooks now write).
 : > "$SL_PREFIX/hooks/.skip-replay-${PARENT_HASH}"
 SL_LINK="$TMP/sl-fake-claude/statusline-command.sh"

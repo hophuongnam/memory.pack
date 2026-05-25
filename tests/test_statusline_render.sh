@@ -368,5 +368,61 @@ if [ -f "$SL" ]; then
   done
 fi
 
+# ─── statusline-command.sh integration: full mode ─────────────────────────
+FIX="$HERE/fixtures"
+
+if [ -f "$SL" ]; then
+  # Sandbox HOME so the script doesn't read the real user's marker files.
+  TMPHOME=$(mktemp -d); trap 'rm -rf "$TMPHOME" "$TMPLOG"' EXIT
+  mkdir -p "$TMPHOME/.claude"
+  # Provide a token-rate log with a known shape so the sparkline renders.
+  cat > "$TMPHOME/.claude/statusline-token-rate.log" <<'LOG'
+1779700000 test-session-full 100
+1779700060 test-session-full 250
+1779700120 test-session-full 600
+1779700180 test-session-full 700
+1779700240 test-session-full 1200
+1779700300 test-session-full 1800
+LOG
+
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+
+  # 3 lines in full mode (use printf '%s\n' to restore the trailing newline
+  # that $() strips — wc -l counts newlines, so 3 lines = 3 newlines).
+  lc=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  [ "$lc" = "3" ] && ok "full mode: 3 output lines" || bad "full mode: 3 output lines" "got $lc; out: $out"
+
+  # Line 1 contains the model pill — look for a 48;2;R;G;B (background ANSI)
+  echo "$out" | head -n 1 | grep -q $'\033\[48;2;' \
+    && ok "full mode: model pill renders truecolor bg" \
+    || bad "full mode: model pill renders truecolor bg"
+
+  # Line 1 contains the directory name
+  echo "$out" | head -n 1 | grep -q 'test-project' \
+    && ok "full mode: dir name on line 1" \
+    || bad "full mode: dir name on line 1"
+
+  # Line 2 contains "ctx", "5h", and "7d" labels
+  echo "$out" | sed -n '2p' | grep -q 'ctx' \
+    && ok "full mode: ctx label on line 2" \
+    || bad "full mode: ctx label on line 2"
+  echo "$out" | sed -n '2p' | grep -q '5h' \
+    && ok "full mode: 5h label on line 2" \
+    || bad "full mode: 5h label on line 2"
+  echo "$out" | sed -n '2p' | grep -q '7d' \
+    && ok "full mode: 7d label on line 2" \
+    || bad "full mode: 7d label on line 2"
+
+  # Line 3 contains a sparkline glyph (any of ▁..█)
+  echo "$out" | sed -n '3p' | grep -qE '[▁▂▃▄▅▆▇█]' \
+    && ok "full mode: sparkline glyph on line 3" \
+    || bad "full mode: sparkline glyph on line 3"
+
+  # Line 3 contains "turn" label (full mode only)
+  echo "$out" | sed -n '3p' | grep -q 'turn' \
+    && ok "full mode: turn label on line 3" \
+    || bad "full mode: turn label on line 3"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

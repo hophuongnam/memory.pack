@@ -88,75 +88,7 @@ format_reset() {
     fi
 }
 
-# --- Helper: format a percentage with color, mini bar, and optional reset time ---
-# Usage: format_pct <label> <value> [reset_epoch] [warn_thresh] [crit_thresh] [bar_width]
-format_pct() {
-    label="$1"
-    val="$2"
-    reset_epoch="$3"
-    warn_at="${4:-50}"
-    crit_at="${5:-80}"
-    bar_width="${6:-10}"
-    pct=$(printf '%.0f' "$val")
-
-    # Color: green < warn, yellow warn..(crit-1), red >= crit
-    if [ "$pct" -ge "$crit_at" ] 2>/dev/null; then
-        color="\033[1;31m"
-    elif [ "$pct" -ge "$warn_at" ] 2>/dev/null; then
-        color="\033[1;33m"
-    else
-        color="\033[1;32m"
-    fi
-
-    # Mini progress bar
-    filled=$(( (pct * bar_width + 99) / 100 ))
-    bar=""
-    i=0
-    while [ $i -lt $bar_width ]; do
-        if [ $i -lt $filled ]; then
-            bar="${bar}${color}▓"
-        else
-            bar="${bar}\033[2;37m░"
-        fi
-        i=$((i+1))
-    done
-
-    reset_str=""
-    if [ -n "$reset_epoch" ]; then
-        r=$(format_reset "$reset_epoch")
-        [ -n "$r" ] && reset_str=" \033[2m↻${r}\033[0m"
-    fi
-
-    printf "%s %s%s%%%%\033[0m %s\033[0m%s" \
-        "$label" "$color" "$pct" "$bar" "$reset_str"
-}
-
-# --- Git info (branch + dirty + lines changed) ---
-git_part=""
-if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
-    branch=$(git -C "$project_dir" symbolic-ref --short HEAD 2>/dev/null || git -C "$project_dir" rev-parse --short HEAD 2>/dev/null)
-    if [ -n "$branch" ]; then
-        dirty=""
-        if ! git -C "$project_dir" diff --quiet HEAD 2>/dev/null; then
-            dirty="*"
-        fi
-        # Lines added/removed (unstaged + staged vs HEAD)
-        diffstat=$(git -C "$project_dir" diff HEAD --shortstat 2>/dev/null)
-        adds=$(echo "$diffstat" | grep -o '[0-9]* insertion' | grep -o '[0-9]*')
-        dels=$(echo "$diffstat" | grep -o '[0-9]* deletion' | grep -o '[0-9]*')
-        line_info=""
-        [ -n "$adds" ] && line_info="\033[32m+${adds}\033[0m"
-        if [ -n "$dels" ]; then
-            [ -n "$line_info" ] && line_info="${line_info}/"
-            line_info="${line_info}\033[31m-${dels}\033[0m"
-        fi
-        git_part=" \033[2;36m ${branch}${dirty}\033[0m"
-        [ -n "$line_info" ] && git_part="${git_part} ${line_info}"
-    fi
-fi
-
 # --- Continuity system status ---
-continuity_part=""
 HOOK_STATE_DIR="$HOME/.claude/hook_state"
 MEMORY_BASE="$HOME/.claude/projects"
 
@@ -194,16 +126,7 @@ if [ -n "$project_dir" ]; then
         # Harness truncates MEMORY.md at 200 lines OR 25KB (=25600 bytes).
         # Soft cap 150 lines / ~19KB. Green < 75/13KB, yellow 75-115/13-19KB,
         # red 116-199/19-24KB, blinking white-on-red at hard cap.
-        if [ "$mem_lines" -ge 200 ] || [ "$mem_bytes" -ge 25600 ]; then
-            # Hard truncation reached — content is being silently dropped.
-            continuity_part="\033[1;5;37;41m 🚨 TRUNCATED ${mem_lines}L ${mem_kb}KB \033[0m"
-        elif [ "$mem_lines" -gt 115 ] || [ "$mem_bytes" -gt 19500 ]; then
-            continuity_part="\033[1;31m🧠 ${mem_lines}/150 ${mem_kb}KB\033[0m"
-        elif [ "$mem_lines" -gt 75 ] || [ "$mem_bytes" -gt 12800 ]; then
-            continuity_part="\033[1;33m🧠 ${mem_lines}/150 ${mem_kb}KB\033[0m"
-        else
-            continuity_part="\033[1;32m🧠 ${mem_lines}/150 ${mem_kb}KB\033[0m"
-        fi
+        # (mem_lines, mem_bytes, mem_kb computed here; assembled into mem_part below)
     fi
 fi
 
@@ -217,16 +140,7 @@ fi
 # session-end.sh writes a synthetic boot-context titled "Replay failed for
 # prior session". boot-inject.sh still sets marker=loaded for that case, so
 # the replay-err overlay needs the transcript grep layered on top.
-boot_status=""
 marker_file="$MP_HOOKS_DIR/.boot-marker-${session_id}"
-if [ -n "$session_id" ] && [ -f "$marker_file" ]; then
-    case "$(cat "$marker_file" 2>/dev/null)" in
-        loaded)
-            boot_status="\033[2;32m✓booted\033[0m" ;;
-        pending)
-            boot_status="\033[2;33m⏳pending\033[0m" ;;
-    esac
-fi
 if [ -n "$transcript" ] && [ -f "$transcript" ]; then
     # Drill into the actual SessionStart hook_additional_context attachment
     # rather than grepping the transcript head as free text — otherwise any
@@ -238,10 +152,6 @@ if [ -n "$transcript" ] && [ -f "$transcript" ]; then
                and .attachment.hookEvent=="SessionStart")
         | .attachment.content
         | if type=="array" then .[0] else . end' 2>/dev/null | head -1)
-    case "$boot_content" in
-        "[Replay failed for prior session"*)
-            boot_status="\033[1;31m⚠replay-err\033[0m" ;;
-    esac
 fi
 
 # Skip-replay opt-out: session-end.sh skips this session's replay when the
@@ -249,69 +159,207 @@ fi
 # replay"). <hash> = first 8 hex of md5(project_dir), exactly as derived in
 # session-end.sh:28 / boot-inject.sh:35. Surface it so continuity being
 # opted out for this session is visible rather than silent.
-skip_part=""
 # Resolve PROJECT_KEY against CC's slug (transcript-anchored) so the hash
 # matches hooks' derivation even when workspace.project_dir is empty.
 proj_key=$(mp_resolve_project_key "$transcript" "$project_dir")
 if [ -n "$proj_key" ]; then
     proj_hash=$(printf '%s' "$proj_key" | mp_proj_hash 2>/dev/null)
-    if [ -n "$proj_hash" ] && [ -f "$HOOKS_DIR/.skip-replay-${proj_hash}" ]; then
-        skip_part="\033[1;33m⏭skip-replay\033[0m"
+fi
+
+# --- Source render helpers ---
+# SL_DIR / MP_HOOKS_DIR already resolved above.
+. "$MP_HOOKS_DIR/statusline-theme.sh"
+. "$MP_HOOKS_DIR/statusline-icons.sh"
+. "$MP_HOOKS_DIR/statusline-render.sh"
+
+cols="${COLUMNS:-80}"
+mode=$(mp_width_mode "$cols")
+
+ansi_fg() {
+  # $1 = "R G B"
+  set -- $1
+  printf '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"
+}
+ansi_bg() {
+  set -- $1
+  printf '\033[48;2;%s;%s;%sm' "$1" "$2" "$3"
+}
+RESET='\033[0m'
+
+# Model pill: pick anchor by family substring, foreground by luminance.
+model_lower=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+case "$model_lower" in
+  *opus*)   anchor="$THEME_PILL_OPUS_ANCHOR" ;;
+  *sonnet*) anchor="$THEME_PILL_SONNET_ANCHOR" ;;
+  *haiku*)  anchor="$THEME_PILL_HAIKU_ANCHOR" ;;
+  *)        anchor="$THEME_PILL_OTHER_ANCHOR" ;;
+esac
+pill_fg=$(mp_pill_fg "$anchor")
+# Compact model name for narrow modes (strip version suffixes)
+pill_label=$(printf '%s' "$model" | awk '{
+  s=$0; sub(/^claude-/, "", s); sub(/-[0-9.]+(\[.*\])?$/, "", s); print s
+}')
+[ "$mode" = "narrow" ] && pill_label=$(printf '%s' "$pill_label" | awk '{
+  if (index($0,"opus"))   {print "opus"; next}
+  if (index($0,"sonnet")) {print "sonnet"; next}
+  if (index($0,"haiku"))  {print "haiku"; next}
+  print $0
+}')
+pill="$(ansi_bg "$anchor")$(ansi_fg "$pill_fg") ${pill_label} ${RESET}"
+
+# Reset format_pct to use theme RGB instead of legacy 16-color ANSI.
+format_pct() {
+  label="$1"; val="$2"; reset_epoch="$3"
+  warn_at="${4:-50}"; crit_at="${5:-80}"; bar_width="${6:-10}"
+  [ "$mode" = "medium" ] && bar_width=6
+  [ "$mode" = "narrow" ] && bar_width=0
+  pct=$(printf '%.0f' "$val")
+  if   [ "$pct" -ge "$crit_at" ] 2>/dev/null; then fill="$THEME_BAR_FILL_ALERT"
+  elif [ "$pct" -ge "$warn_at" ] 2>/dev/null; then fill="$THEME_BAR_FILL_WARN"
+  else                                              fill="$THEME_BAR_FILL_SAFE"
+  fi
+  fill_ansi=$(ansi_fg "$fill")
+  empty_ansi=$(ansi_fg "$THEME_BAR_EMPTY")
+  filled=$(( (pct * bar_width + 99) / 100 ))
+  bar=""; i=0
+  while [ $i -lt $bar_width ]; do
+    if [ $i -lt $filled ]; then bar="${bar}${fill_ansi}▓"
+    else                        bar="${bar}${empty_ansi}░"
     fi
-fi
+    i=$((i+1))
+  done
+  reset_str=""
+  if [ -n "$reset_epoch" ] && [ "$mode" != "narrow" ]; then
+    r=$(format_reset "$reset_epoch")
+    [ -n "$r" ] && reset_str=" \033[2m↻${r}${RESET}"
+  fi
+  if [ "$mode" = "narrow" ]; then
+    printf "%s %s%s%%%%${RESET}" "$label" "$fill_ansi" "$pct"
+  else
+    printf "%s %s%s%%%%${RESET} %s${RESET}%s" "$label" "$fill_ansi" "$pct" "$bar" "$reset_str"
+  fi
+}
 
-[ -n "$continuity_part" ] && continuity_part="${continuity_part} "
-continuity_part="${continuity_part}${boot_status}"
-# Append the skip indicator. Guard against a doubled separator: when
-# boot_status was empty, continuity_part still ends in the space added just
-# above, so append directly in that case.
-if [ -n "$skip_part" ]; then
-    case "$continuity_part" in
-        "")    continuity_part="$skip_part" ;;
-        *" ")  continuity_part="${continuity_part}${skip_part}" ;;
-        *)     continuity_part="${continuity_part} ${skip_part}" ;;
-    esac
-fi
-
-# --- Line 1: folder + vibe + model + git ---
+# --- Line 1 ---
 vibe_part=""
-if [ -n "$vibe" ]; then
-    vibe_part=" \033[1;35m⚡${vibe}\033[0m"
+[ -n "$vibe" ] && vibe_part=" $(ansi_fg "$THEME_FG_VIBE")${ICON_VIBE}${vibe}${RESET}"
+
+git_part=""
+if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
+  branch=$(git -C "$project_dir" symbolic-ref --short HEAD 2>/dev/null || git -C "$project_dir" rev-parse --short HEAD 2>/dev/null)
+  if [ -n "$branch" ]; then
+    dirty=""
+    git -C "$project_dir" diff --quiet HEAD 2>/dev/null || dirty="$(ansi_fg "$THEME_FG_DIRTY")${ICON_DIRTY}${RESET}"
+    line_info=""
+    if [ "$mode" != "narrow" ]; then
+      diffstat=$(git -C "$project_dir" diff HEAD --shortstat 2>/dev/null)
+      adds=$(echo "$diffstat" | grep -o '[0-9]* insertion' | grep -o '[0-9]*')
+      dels=$(echo "$diffstat" | grep -o '[0-9]* deletion' | grep -o '[0-9]*')
+      [ -n "$adds" ] && line_info="$(ansi_fg "$THEME_FG_LINES_ADD")+${adds}${RESET}"
+      if [ -n "$dels" ]; then
+        [ -n "$line_info" ] && line_info="${line_info}/"
+        line_info="${line_info}$(ansi_fg "$THEME_FG_LINES_DEL")-${dels}${RESET}"
+      fi
+    fi
+    git_part=" $(ansi_fg "$THEME_FG_BRANCH")${ICON_BRANCH} ${branch}${RESET}${dirty}"
+    [ -n "$line_info" ] && git_part="${git_part} ${line_info}"
+  fi
+fi
+
+# Memory indicator (3-step ladder)
+mem_part=""
+if [ -n "$mem_lines" ] 2>/dev/null && [ "$mem_lines" -ge 0 ] 2>/dev/null; then
+  if [ "$mem_lines" -ge 200 ] || [ "$mem_bytes" -ge 25600 ]; then
+    mem_part=$(printf '\033[1;5;48;2;%sm 🚨 TRUNCATED %sL %sKB %s' \
+      "$(echo "$THEME_FG_MEMORY_CRIT" | tr ' ' ';')" "$mem_lines" "$mem_kb" "$RESET")
+  elif [ "$mem_lines" -gt 115 ] || [ "$mem_bytes" -gt 19500 ]; then
+    mem_part="$(ansi_fg "$THEME_FG_MEMORY_CRIT")${ICON_MEMORY} ${mem_lines}/150"
+    [ "$mode" != "narrow" ] && mem_part="${mem_part} ${mem_kb}KB"
+    mem_part="${mem_part}${RESET}"
+  elif [ "$mem_lines" -gt 75 ] || [ "$mem_bytes" -gt 12800 ]; then
+    mem_part="$(ansi_fg "$THEME_FG_MEMORY_WARN")${ICON_MEMORY} ${mem_lines}/150"
+    [ "$mode" != "narrow" ] && mem_part="${mem_part} ${mem_kb}KB"
+    mem_part="${mem_part}${RESET}"
+  else
+    mem_part="$(ansi_fg "$THEME_FG_MEMORY_OK")${ICON_MEMORY} ${mem_lines}/150"
+    [ "$mode" != "narrow" ] && mem_part="${mem_part} ${mem_kb}KB"
+    mem_part="${mem_part}${RESET}"
+  fi
+fi
+
+# Boot/skip overlay rebuilt with theme RGB. Detection (marker_file content,
+# boot_content, proj_hash) ran earlier. Indicators are NEVER dropped in any
+# width mode — silent-amnesia signal preservation.
+boot_status_themed=""
+if [ -n "$session_id" ] && [ -f "$marker_file" ]; then
+  case "$(cat "$marker_file" 2>/dev/null)" in
+    loaded)  boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_OK")${ICON_BOOT_OK}booted${RESET}" ;;
+    pending) boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_PENDING")${ICON_BOOT_PENDING}pending${RESET}" ;;
+  esac
+fi
+case "$boot_content" in
+  "[Replay failed for prior session"*)
+    boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_ERR")${ICON_BOOT_ERR}replay-err${RESET}" ;;
+esac
+
+skip_themed=""
+if [ -n "$proj_hash" ] && [ -f "$HOOKS_DIR/.skip-replay-${proj_hash}" ]; then
+  skip_themed="$(ansi_fg "$THEME_FG_SKIP_REPLAY")${ICON_SKIP_REPLAY}skip-replay${RESET}"
 fi
 
 cont_display=""
-if [ -n "$continuity_part" ]; then
-    cont_display=" \033[2m│\033[0m ${continuity_part}"
-fi
+sep=" \033[2m│${RESET} "
+overlay=""
+[ -n "$mem_part" ]           && overlay="${mem_part}"
+[ -n "$boot_status_themed" ] && overlay="${overlay:+${overlay} }${boot_status_themed}"
+[ -n "$skip_themed" ]        && overlay="${overlay:+${overlay} }${skip_themed}"
+[ -n "$overlay" ]            && cont_display="${sep}${overlay}"
 
-printf "\033[1;37m%s\033[0m%b \033[2m· %s\033[0m%b%b\n" "$dir" "$vibe_part" "$model" "$git_part" "$cont_display"
+printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b\n" \
+  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$git_part" "$cont_display"
 
-# --- Line 2: limits with mini bars ---
+# --- Line 2 ---
 parts=""
-sep="\033[2m │ \033[0m"
-
 if [ -n "$ctx" ] && [ "$ctx" != "0" ]; then
-    parts="$(format_pct "\033[36m◐\033[0m ctx" "$ctx")"
+  parts="$(format_pct "$(ansi_fg "$THEME_FG_CTX_ICON")${ICON_CTX}${RESET} ctx" "$ctx")"
 fi
 if [ -n "$five_h" ]; then
-    [ -n "$parts" ] && parts="${parts}${sep}"
-    parts="${parts}$(format_pct "\033[35m⏱\033[0m 5h" "$five_h" "$five_h_reset" 80 90)"
+  [ -n "$parts" ] && parts="${parts}${sep}"
+  parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_5H_ICON")${ICON_5H}${RESET} 5h" "$five_h" "$five_h_reset" 80 90)"
 fi
 if [ -n "$seven_d" ]; then
-    [ -n "$parts" ] && parts="${parts}${sep}"
-    # Pace-adaptive warn: days_elapsed/7 * 100. Daily step jumps.
-    seven_d_warn=80
-    if [ -n "$seven_d_reset" ]; then
-        days_left=$(( (seven_d_reset - $(date +%s)) / 86400 ))
-        [ "$days_left" -lt 0 ] && days_left=0
-        [ "$days_left" -gt 7 ] && days_left=7
-        days_elapsed=$(( 7 - days_left ))
-        seven_d_warn=$(( days_elapsed * 100 / 7 ))
-        [ "$seven_d_warn" -lt 14 ] && seven_d_warn=14
-    fi
-    parts="${parts}$(format_pct "\033[34m⏳\033[0m 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
+  [ -n "$parts" ] && parts="${parts}${sep}"
+  seven_d_warn=80
+  if [ -n "$seven_d_reset" ]; then
+    days_left=$(( (seven_d_reset - $(date +%s)) / 86400 ))
+    [ "$days_left" -lt 0 ] && days_left=0
+    [ "$days_left" -gt 7 ] && days_left=7
+    days_elapsed=$(( 7 - days_left ))
+    seven_d_warn=$(( days_elapsed * 100 / 7 ))
+    [ "$seven_d_warn" -lt 14 ] && seven_d_warn=14
+  fi
+  parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
 fi
+[ -n "$parts" ] && printf "${parts}\n"
 
-if [ -n "$parts" ]; then
-    printf "${parts}\n"
+# --- Line 3: turn-rate sparkline (full + medium only) ---
+if [ "$mode" != "narrow" ]; then
+  TOKEN_LOG="$HOME/.claude/statusline-token-rate.log"
+  if [ -f "$TOKEN_LOG" ] && [ -n "$session_id" ]; then
+    deltas=$(mp_sparkline_data "$TOKEN_LOG" "$session_id")
+    if [ -n "$deltas" ]; then
+      bars=$(mp_sparkline_render "$deltas")
+      if [ "$mode" = "full" ]; then
+        # "last" + "peak" stats next to the bars.
+        last=$(printf '%s' "$deltas" | awk '{printf "%d", $NF}')
+        peak=$(printf '%s' "$deltas" | awk '{ m=0; for(i=1;i<=NF;i++) if ($i+0 > m) m=$i+0; printf "%d", m }')
+        last_s=$(awk -v n="$last" 'BEGIN { if (n >= 1000000) printf "%.1fM", n/1000000; else if (n >= 1000) printf "%.1fK", n/1000; else printf "%d", n }')
+        peak_s=$(awk -v n="$peak" 'BEGIN { if (n >= 1000000) printf "%.1fM", n/1000000; else if (n >= 1000) printf "%.1fK", n/1000; else printf "%d", n }')
+        # Double-quote format string so ${RESET} expands; printf then interprets \033.
+        printf "\033[2mturn${RESET} %b  \033[2mlast${RESET} %s \033[2m·${RESET} \033[2mpeak${RESET} %s\n" "$bars" "$last_s" "$peak_s"
+      else
+        printf '%b\n' "$bars"
+      fi
+    fi
+  fi
 fi
