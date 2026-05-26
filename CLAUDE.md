@@ -164,13 +164,17 @@ per real-CC transcripts, mutation-pinned), idempotent re-fire, monotonic
 cum>last_cum filter, per-session isolation; cumulative tokens are sum of
 all 4 fields so a dropped subfield kills 4 assertions),
 `test_statusline_render` (the renderer cluster: theme + icons + render
-helpers + statusline-command.sh integration. 118 assertions covering
+helpers + statusline-command.sh integration. 124 assertions covering
 source-time silence on every sourced helper, ICON_* existence in both
 Nerd/Unicode tables, `mp_pill_fg` luminance flip with mid-boundary
 coverage, `mp_gradient_color` interpolation across all 4 segments,
 `mp_sparkline_data` 16-cap + negative-clamp, full/medium/narrow render
 output line counts + bar widths + sparkline glyph presence + boot
-indicator preservation across all width modes). Two accepted
+indicator preservation across all width modes, COLUMNS=0/empty/unset
+coerce-to-default — pins the silent-amnesia analog where CC spawns the
+statusline subprocess with `COLUMNS=0` and `${COLUMNS:-80}` keeps it at
+`0` because `:-` only substitutes for unset/empty, so line 3 silently
+dropped on every CC invocation). Two accepted
 patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only

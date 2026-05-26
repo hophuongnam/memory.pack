@@ -493,5 +493,30 @@ if [ -f "$SL" ]; then
     || bad "narrow mode: pill label compacted to 'opus'" "got: $(echo "$out2" | head -1)"
 fi
 
+# ─── statusline-command.sh integration: COLUMNS=0/empty/unset ──────────────
+# CC spawns the statusline subprocess with COLUMNS=0 (observed empirically on
+# v2.1.150). Naive `${COLUMNS:-80}` does NOT substitute for "0" (only for
+# unset/empty), so cols stays 0 → mp_width_mode → "narrow" → line 3 silently
+# dropped on every CC invocation. That was the real user-reported symptom:
+# "I never see line 3 in practice." The default MUST kick in for cols ≤ 0
+# (and for non-numeric — covered by the narrow-fallthrough in mp_width_mode
+# itself, but the statusline-command.sh assignment is what feeds it).
+if [ -f "$SL" ]; then
+  for cols_setting in "COLUMNS=0" "COLUMNS=" ""; do
+    eval "out=\$($cols_setting HOME=\"\$TMPHOME\" MEMORY_PACK_NERDFONT=0 bash \"\$SL\" < \"\$FIX/statusline-stdin-full.json\" 2>/dev/null)"
+
+    lc=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+    label="${cols_setting:-COLUMNS unset}"
+    [ "$lc" = "3" ] && ok "$label: 3 lines (line 3 renders)" \
+      || bad "$label: 3 lines (line 3 renders)" "got $lc; out: $out"
+
+    # Line 3 must contain a sparkline glyph — proves the cols-coerce-to-default
+    # branch reaches mp_sparkline_render, not just any 3rd line of output.
+    echo "$out" | sed -n '3p' | grep -qE '[▁▂▃▄▅▆▇█]' \
+      && ok "$label: sparkline glyph on line 3" \
+      || bad "$label: sparkline glyph on line 3"
+  done
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

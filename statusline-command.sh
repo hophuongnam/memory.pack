@@ -173,7 +173,13 @@ fi
 . "$MP_HOOKS_DIR/statusline-icons.sh"
 . "$MP_HOOKS_DIR/statusline-render.sh"
 
+# CC spawns the statusline subprocess with COLUMNS=0 (v2.1.150, observed
+# 2026-05-26). `${COLUMNS:-80}` only substitutes for unset/empty — "0" is
+# non-empty, so the fallback never kicks in and mp_width_mode 0 → "narrow",
+# silently dropping line 3 on every CC invocation. Coerce ≤0 and non-numeric
+# to 80 so mp_width_mode receives a positive integer the comparisons accept.
 cols="${COLUMNS:-80}"
+if ! [ "$cols" -gt 0 ] 2>/dev/null; then cols=80; fi
 mode=$(mp_width_mode "$cols")
 
 ansi_fg() {
