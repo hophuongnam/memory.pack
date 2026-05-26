@@ -156,10 +156,13 @@ Green.World/ACPay/Red.Sunrise subfolder hashes),
 must produce NO stdout on every branch — silent-amnesia analog because
 the helper is sourced by `statusline-icons.sh`),
 `test_log_token_rate` (Stop hook `log-token-rate.sh`: happy/race-lost/
-empty/missing/snake↔camel paths + multi-turn fixture asserts last
-assistant `.message.usage` wins + malformed-JSONL doesn't crash;
-cumulative tokens are sum of all 4 fields so a dropped subfield kills
-4 assertions),
+empty/missing/snake↔camel paths + malformed-JSONL doesn't crash;
+backfill semantics — emits one cum per turn boundary (assistant whose
+next user-or-asst is a real user-prompt — NOT tool_result continuation,
+NOT `isMeta:true` mid-turn system-reminder; isMeta skip is load-bearing
+per real-CC transcripts, mutation-pinned), idempotent re-fire, monotonic
+cum>last_cum filter, per-session isolation; cumulative tokens are sum of
+all 4 fields so a dropped subfield kills 4 assertions),
 `test_statusline_render` (the renderer cluster: theme + icons + render
 helpers + statusline-command.sh integration. 118 assertions covering
 source-time silence on every sourced helper, ICON_* existence in both

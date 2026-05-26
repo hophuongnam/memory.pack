@@ -1,9 +1,23 @@
 #!/bin/bash
-# TDD: hooks/log-token-rate.sh — Stop hook that tails the transcript jsonl,
-# extracts the most recent assistant .message.usage, and appends a cumulative-
-# token sample to ~/.claude/statusline-token-rate.log. Race-tolerant: if no
-# assistant entry is in the tail window (CC hasn't flushed yet), the hook
-# exits 0 silently and writes NOTHING. The next Stop catches up.
+# TDD: hooks/log-token-rate.sh — Stop hook that scans the transcript jsonl
+# for per-turn cumulative-token samples and appends them to
+# ~/.claude/statusline-token-rate.log. statusline-command.sh tails this log
+# (last 16 per session) for the turn-rate sparkline.
+#
+# A "turn boundary" = an assistant entry with .message.usage whose immediate
+# next user-or-assistant entry is a REAL user-prompt (string content, OR
+# array content without tool_result blocks) — not a tool_result continuation,
+# not an isMeta:true system-reminder injection (CC's own bookkeeping +
+# Memory.Pack's auto-save-stop feedback both appear as isMeta:true user
+# entries mid-turn; treating them as boundaries would emit spurious
+# intermediate cumulatives). End-of-file also counts as a boundary.
+#
+# Backfill: on the first Stop of a /resume'd session, this catches up all
+# prior turns' cumulatives so line-3 lights up from turn 1 instead of after
+# the second Stop. Idempotent across re-fires via a monotonic cum > last-
+# logged filter (cumulative-tokens are monotonic within a session by
+# construction). Race-tolerant: if no usage info is in the transcript yet
+# (CC hasn't flushed), exit 0 silently — next Stop catches up.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HOOK="$HERE/../hooks/log-token-rate.sh"
@@ -65,9 +79,10 @@ echo "$line" | grep -qE '^[0-9]+ sid-V 1559$' \
   && ok "camelCase stdin accepted" \
   || bad "camelCase stdin accepted" "got '$line'"
 
-# ─── multi-turn fixture: only the LAST assistant entry counts ─────────────
-# CC's tail-n-50 looks at recent records; if multiple assistant turns are
-# in the window, only the last cumulative count should be logged.
+# ─── multi-turn fixture: backfill emits BOTH turn boundaries ──────────────
+# Two completed turns, no tool_use, no isMeta. Backfill emits one log line
+# per turn boundary (assistant whose next user-or-assistant is a user-prompt
+# or EOF). Cumulative is monotonic so both 15 and 150 land.
 MULTI=$(mktemp); trap 'rm -rf "$SBX" "$MULTI"' EXIT
 cat > "$MULTI" <<'JL'
 {"type":"user","message":{"content":"q1"}}
@@ -77,11 +92,74 @@ cat > "$MULTI" <<'JL'
 JL
 > "$LOG"
 echo "{\"session_id\":\"sid-MULTI\",\"transcript_path\":\"$MULTI\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
-line=$(tail -n 1 "$LOG")
-# Last assistant: 100 + 0 + 0 + 50 = 150
-echo "$line" | grep -qE '^[0-9]+ sid-MULTI 150$' \
-  && ok "multi-turn transcript: uses last assistant usage only" \
-  || bad "multi-turn transcript: uses last assistant usage only" "got '$line'"
+n=$(grep -c '^[0-9]* sid-MULTI ' "$LOG")
+[ "$n" -eq 2 ] && ok "multi-turn: both turn boundaries emitted (n=2)" || bad "multi-turn: both turn boundaries emitted" "got n=$n, log=$(cat "$LOG")"
+grep -qE '^[0-9]+ sid-MULTI 15$'  "$LOG" && ok "multi-turn: turn 1 cum=15 logged"  || bad "multi-turn: turn 1 cum=15 logged"  "log=$(cat "$LOG")"
+grep -qE '^[0-9]+ sid-MULTI 150$' "$LOG" && ok "multi-turn: turn 2 cum=150 logged" || bad "multi-turn: turn 2 cum=150 logged" "log=$(cat "$LOG")"
+
+# ─── BACKFILL realism: tool_use loop + isMeta:true mid-turn injection ─────
+# Shape verified against real CC transcripts on 2026-05-26. Critical cases:
+#   • Multiple assistant entries within one turn (thinking, tool_use) —
+#     only the LAST one before the next real user-prompt counts.
+#   • A user-content entry whose .message.content is an array starting with
+#     "tool_result" is a continuation, not a boundary.
+#   • A user-content entry with .isMeta == true is CC bookkeeping
+#     (system-reminder, our own auto-save-stop feedback) — must be skipped
+#     in the boundary check, never treated as a real user-prompt.
+BACKFILL=$(mktemp); trap 'rm -rf "$SBX" "$MULTI" "$BACKFILL"' EXIT
+cat > "$BACKFILL" <<'JL'
+{"type":"user","message":{"role":"user","content":"prompt 1"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":50,"output_tokens":20}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"X","input":{}}],"usage":{"input_tokens":50,"output_tokens":25}}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>x</system-reminder>"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"r1"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"final 1"}],"usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"prompt 2"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"final 2"}],"usage":{"input_tokens":200,"output_tokens":100}}}
+JL
+> "$LOG"
+echo "{\"session_id\":\"sid-BF\",\"transcript_path\":\"$BACKFILL\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+[ "$?" -eq 0 ] && ok "backfill: hook exits 0" || bad "backfill: hook exits 0"
+n=$(grep -c '^[0-9]* sid-BF ' "$LOG")
+[ "$n" -eq 2 ] && ok "backfill: exactly 2 turn boundaries logged" || bad "backfill: exactly 2 turn boundaries logged" "got n=$n, log=$(cat "$LOG")"
+# Turn 1: final assistant after tool_result + isMeta. cum = 100+0+0+50 = 150.
+grep -qE '^[0-9]+ sid-BF 150$' "$LOG" && ok "backfill: turn 1 cum=150 (post-tool_use)" || bad "backfill: turn 1 cum=150" "log=$(cat "$LOG")"
+# Turn 2: final assistant before EOF. cum = 200+0+0+100 = 300.
+grep -qE '^[0-9]+ sid-BF 300$' "$LOG" && ok "backfill: turn 2 cum=300 (pre-EOF)" || bad "backfill: turn 2 cum=300" "log=$(cat "$LOG")"
+# Intermediate cumulatives that MUST NOT appear:
+#   thinking asst: 50+20 = 70 — followed by another assistant (not user)
+#   tool_use asst: 50+25 = 75 — followed by user tool_result (not user-prompt)
+for spurious in 70 75; do
+  if grep -qE "^[0-9]+ sid-BF $spurious$" "$LOG"; then
+    bad "backfill: intermediate cum=$spurious leaked (NOT a turn boundary)" "log=$(cat "$LOG")"
+  else
+    ok "backfill: intermediate cum=$spurious correctly skipped"
+  fi
+done
+
+# ─── BACKFILL idempotency: 2nd fire on unchanged transcript adds nothing ──
+n_before=$(wc -l < "$LOG")
+echo "{\"session_id\":\"sid-BF\",\"transcript_path\":\"$BACKFILL\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+n_after=$(wc -l < "$LOG")
+[ "$n_before" -eq "$n_after" ] && ok "backfill: 2nd fire is no-op (idempotent)" || bad "backfill: 2nd fire idempotent" "before=$n_before after=$n_after"
+
+# ─── BACKFILL monotonic filter: respects pre-existing log entries ─────────
+# Prime log with turn 1's cum only; backfill must emit ONLY turn 2.
+> "$LOG"
+ts=$(date +%s)
+printf '%s sid-BF 150\n' "$ts" > "$LOG"
+echo "{\"session_id\":\"sid-BF\",\"transcript_path\":\"$BACKFILL\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+n=$(grep -c '^[0-9]* sid-BF ' "$LOG")
+[ "$n" -eq 2 ] && ok "backfill: monotonic filter — only cum>last_logged emitted" || bad "backfill: monotonic filter" "got n=$n log=$(cat "$LOG")"
+grep -qE '^[0-9]+ sid-BF 300$' "$LOG" && ok "backfill: new turn cum=300 added" || bad "backfill: new turn cum=300 added"
+
+# ─── BACKFILL session isolation: other sessions' entries are not double-counted ─
+# Log has sid-BF 150; running for sid-OTHER must not see sid-BF's 150 as "last_cum".
+> "$LOG"
+printf '%s sid-OLD 999999\n' "$(date +%s)" > "$LOG"
+echo "{\"session_id\":\"sid-BF\",\"transcript_path\":\"$BACKFILL\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+n=$(grep -c '^[0-9]* sid-BF ' "$LOG")
+[ "$n" -eq 2 ] && ok "backfill: per-session last_cum (sid-OLD's 999999 doesn't shadow sid-BF)" || bad "backfill: per-session last_cum" "got n=$n log=$(cat "$LOG")"
 
 # ─── malformed JSONL line in tail → skipped silently ───────────────────────
 # A truncated mid-write line from CC shouldn't crash the hook.
