@@ -150,6 +150,24 @@ mp_sparkline_render() {
   '
 }
 
+# mp_clock_format: render integer seconds as a human cache-age duration.
+# Format: m:ss for elapsed < 1h, h:mm:ss for >= 1h. Garbage-in tolerant —
+# empty / negative / non-numeric input collapses to "0:00" so the statusline
+# never emits a malformed string when stat/touch transiently fails.
+# (Threshold-agnostic — the dim/red color decision lives in statusline-command.sh,
+# keyed on the 5-minute Anthropic prompt-cache TTL.)
+mp_clock_format() {
+  s="${1:-0}"
+  case "$s" in
+    ''|*[!0-9]*) s=0 ;;
+  esac
+  if [ "$s" -lt 3600 ]; then
+    printf '%d:%02d' $((s/60)) $((s%60))
+  else
+    printf '%d:%02d:%02d' $((s/3600)) $(((s%3600)/60)) $((s%60))
+  fi
+}
+
 # mp_width_mode: given a column count, print "full" (> 80), "medium"
 # (56-80), or "narrow" (≤ 55). Boundaries chosen to match YAS conventions
 # (80 = classic terminal width, 55 = comfortable split-pane).

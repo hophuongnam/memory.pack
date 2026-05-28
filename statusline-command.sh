@@ -273,6 +273,39 @@ if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
   fi
 fi
 
+# Cache-age clock: time since previous statusline render, per session.
+# Anchor file's mtime IS the previous render's timestamp; this render reads
+# it, computes (now - mtime), then touches the file so the next render
+# measures from here. Anthropic's prompt-cache TTL is 5min — at elapsed
+# >= 300s the cache is definitely cold and the next assistant turn pays
+# the full re-warm cost, so we flip dim → red there. Always-visible on
+# Line 1 in every width mode (never dropped, narrow included). Sandwiched
+# between the model pill and git_part so the cache-warmth signal sits
+# next to the model identity it's about. BSD `stat -f %m` first (macOS is
+# the dev host), GNU `stat -c %Y` fallback (Linux + WSL2). Stat failure
+# or missing file → elapsed=0 (renders harmlessly as "0:00"). The touch
+# is the load-bearing side-effect; if it silently no-ops the clock just
+# stays at 0:00 forever, never wrong, never red.
+clock_part=""
+if [ -n "$session_id" ]; then
+  clock_file="$MP_HOOKS_DIR/.statusline-clock-${session_id}"
+  elapsed=0
+  if [ -f "$clock_file" ]; then
+    prev_mtime=$(stat -f %m "$clock_file" 2>/dev/null || stat -c %Y "$clock_file" 2>/dev/null)
+    if [ -n "$prev_mtime" ] && [ "$prev_mtime" -gt 0 ] 2>/dev/null; then
+      elapsed=$(( $(date +%s) - prev_mtime ))
+      [ "$elapsed" -lt 0 ] && elapsed=0
+    fi
+  fi
+  touch "$clock_file" 2>/dev/null
+  clock_str=$(mp_clock_format "$elapsed")
+  if [ "$elapsed" -ge 300 ] 2>/dev/null; then
+    clock_part=" $(ansi_fg "$THEME_FG_MEMORY_CRIT")${clock_str}${RESET}"
+  else
+    clock_part=" \033[2m${clock_str}${RESET}"
+  fi
+fi
+
 # Memory indicator (3-step ladder)
 mem_part=""
 if [ -n "$mem_lines" ] 2>/dev/null && [ "$mem_lines" -ge 0 ] 2>/dev/null; then
@@ -322,8 +355,8 @@ overlay=""
 [ -n "$skip_themed" ]        && overlay="${overlay:+${overlay} }${skip_themed}"
 [ -n "$overlay" ]            && cont_display="${sep}${overlay}"
 
-printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b\n" \
-  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$git_part" "$cont_display"
+printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b%b\n" \
+  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$clock_part" "$git_part" "$cont_display"
 
 # --- Line 2 ---
 parts=""

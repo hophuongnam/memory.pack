@@ -340,6 +340,34 @@ if [ -f "$RENDER" ]; then
   [ "$out" = "narrow" ] && ok "non-numeric cols → narrow, silent" || bad "non-numeric cols → narrow, silent" "got '$out'"
 fi
 
+# ─── mp_clock_format: elapsed-seconds → human duration ────────────────────
+# Cache-age clock formatter. Anthropic prompt-cache TTL is 5min, so the
+# statusline flips to red at >=300s — but the FORMATTER is threshold-agnostic
+# (just renders the duration); the color decision lives in statusline-command.sh.
+# Format: m:ss for <1h, h:mm:ss for >=1h. Bad input (empty/negative/non-num) → "0:00".
+if [ -f "$RENDER" ]; then
+  clock_format_for() {
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_clock_format "$5"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh" "$RENDER" "$1"
+  }
+
+  [ "$(clock_format_for 0)"    = "0:00"    ] && ok "clock fmt: 0 → 0:00"          || bad "clock fmt: 0 → 0:00"          "got '$(clock_format_for 0)'"
+  [ "$(clock_format_for 5)"    = "0:05"    ] && ok "clock fmt: 5 → 0:05"          || bad "clock fmt: 5 → 0:05"          "got '$(clock_format_for 5)'"
+  [ "$(clock_format_for 59)"   = "0:59"    ] && ok "clock fmt: 59 → 0:59"         || bad "clock fmt: 59 → 0:59"         "got '$(clock_format_for 59)'"
+  [ "$(clock_format_for 60)"   = "1:00"    ] && ok "clock fmt: 60 → 1:00"         || bad "clock fmt: 60 → 1:00"         "got '$(clock_format_for 60)'"
+  [ "$(clock_format_for 299)"  = "4:59"    ] && ok "clock fmt: 299 → 4:59 (just below 5min red threshold)" || bad "clock fmt: 299 → 4:59" "got '$(clock_format_for 299)'"
+  [ "$(clock_format_for 300)"  = "5:00"    ] && ok "clock fmt: 300 → 5:00 (red threshold, still m:ss)"     || bad "clock fmt: 300 → 5:00" "got '$(clock_format_for 300)'"
+  [ "$(clock_format_for 3599)" = "59:59"   ] && ok "clock fmt: 3599 → 59:59"      || bad "clock fmt: 3599 → 59:59"      "got '$(clock_format_for 3599)'"
+  [ "$(clock_format_for 3600)" = "1:00:00" ] && ok "clock fmt: 3600 → 1:00:00 (crosses to h:mm:ss)" || bad "clock fmt: 3600 → 1:00:00" "got '$(clock_format_for 3600)'"
+  [ "$(clock_format_for 3665)" = "1:01:05" ] && ok "clock fmt: 3665 → 1:01:05"    || bad "clock fmt: 3665 → 1:01:05"    "got '$(clock_format_for 3665)'"
+  [ "$(clock_format_for 7325)" = "2:02:05" ] && ok "clock fmt: 7325 → 2:02:05"    || bad "clock fmt: 7325 → 2:02:05"    "got '$(clock_format_for 7325)'"
+
+  # Garbage-in tolerance: empty / negative / non-numeric → "0:00" (renders harmlessly).
+  [ "$(clock_format_for "")"     = "0:00" ] && ok "clock fmt: empty → 0:00"        || bad "clock fmt: empty → 0:00"        "got '$(clock_format_for "")'"
+  [ "$(clock_format_for "-5")"   = "0:00" ] && ok "clock fmt: negative → 0:00"     || bad "clock fmt: negative → 0:00"     "got '$(clock_format_for "-5")'"
+  [ "$(clock_format_for "abc")"  = "0:00" ] && ok "clock fmt: non-numeric → 0:00"  || bad "clock fmt: non-numeric → 0:00"  "got '$(clock_format_for "abc")'"
+fi
+
 # ─── snake↔camel stdin parsing on statusline-command.sh (D7, invariant #3) ─
 SL="$HERE/../statusline-command.sh"
 if [ -f "$SL" ]; then
@@ -516,6 +544,139 @@ if [ -f "$SL" ]; then
       && ok "$label: sparkline glyph on line 3" \
       || bad "$label: sparkline glyph on line 3"
   done
+fi
+
+# ─── cache-age clock on Line 1 (per-session anchor, red after 5min) ───────
+# The clock displays time since the previous statusline render, per session.
+# The anchor lives in hooks/.statusline-clock-<session_id> (mtime, refreshed
+# each render). Anthropic's prompt-cache TTL is 5 minutes, so we flip from
+# dim → red at >= 300s — past that, the cache is definitely cold and the
+# next assistant turn pays the full re-warm cost. Visible in ALL width
+# modes (line 1 is always rendered).
+if [ -f "$SL" ]; then
+  HOOKS_TEST_DIR="$HERE/../hooks"
+  CLOCK_SID="test-session-clock"
+  OTHER_SID="test-session-clock-other"
+  CLOCK_FILE="$HOOKS_TEST_DIR/.statusline-clock-${CLOCK_SID}"
+  OTHER_FILE="$HOOKS_TEST_DIR/.statusline-clock-${OTHER_SID}"
+  PRIOR_CLOCK="$HOOKS_TEST_DIR/.statusline-clock-test-session-full"
+
+  # Clean up clock files from prior test runs AND prior assertions in this run
+  # (the full/medium/narrow/COLUMNS=0 blocks above all touch the test-session-full
+  # clock file as a side effect once the impl is wired). Glob-narrow so we
+  # don't nuke real sessions.
+  rm -f "$HOOKS_TEST_DIR"/.statusline-clock-test-session-* 2>/dev/null
+  # Refresh trap to include all clock files we create plus the marker.
+  trap 'rm -rf "$TMPHOME" "$TMPLOG" "$marker"; rm -f "$HOOKS_TEST_DIR"/.statusline-clock-test-session-*' EXIT
+
+  # Build per-session fixture stdin (override session_id / sessionId in both
+  # casings so snake↔camel hooks see the same value).
+  FIX_CLOCK="$TMPHOME/.claude/stdin-clock.json"
+  FIX_OTHER="$TMPHOME/.claude/stdin-clock-other.json"
+  jq ".session_id = \"$CLOCK_SID\"" "$FIX/statusline-stdin-full.json" > "$FIX_CLOCK"
+  jq ".session_id = \"$OTHER_SID\"" "$FIX/statusline-stdin-full.json" > "$FIX_OTHER"
+
+  # 1. First render (no anchor): "0:00" on line 1, anchor file gets created.
+  rm -f "$CLOCK_FILE"
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -q '0:00' \
+    && ok "clock: first render (no anchor) shows 0:00 on line 1" \
+    || bad "clock: first render shows 0:00" "line 1: $line1"
+  [ -f "$CLOCK_FILE" ] && ok "clock: first render creates the anchor file" \
+    || bad "clock: first render creates the anchor file" "expected: $CLOCK_FILE"
+
+  # 2. Anchor 7s ago → "0:0X" (X = 7..9 to tolerate python3+date overhead),
+  # dim (\033[2m), NOT red (no 220;88;99 adjacent).
+  python3 -c "import os, time; t=time.time()-7; os.utime('$CLOCK_FILE', (t, t))"
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -qE '0:0[7-9]' \
+    && ok "clock: 7s anchor → shows 0:0X (tolerant of ±2s)" \
+    || bad "clock: 7s anchor → shows 0:0X" "line 1: $line1"
+  # Dim ANSI present (\033[2m wraps the clock string).
+  printf '%s' "$line1" | grep -qE $'\033\[2m.*0:0[7-9]' \
+    && ok "clock: <5min elapsed renders dim (\\033[2m)" \
+    || bad "clock: <5min elapsed renders dim" "line 1: $line1"
+  # NOT red on the clock string (220;88;99 must not appear immediately before 0:0X).
+  if printf '%s' "$line1" | grep -qE '38;2;220;88;99[^0]*0:0[7-9]'; then
+    bad "clock: <5min elapsed must NOT render red" "line 1: $line1"
+  else
+    ok "clock: <5min elapsed must NOT render red"
+  fi
+
+  # 3. Anchor 310s ago (10s past 5-min red threshold, room for python overhead)
+  # → "5:1X", red. Threshold catch: any mutation that pushes the dim/red flip
+  # ≥ 311 would render this dim instead of red and fail the second assertion.
+  python3 -c "import os, time; t=time.time()-310; os.utime('$CLOCK_FILE', (t, t))"
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -qE '5:1[0-5]' \
+    && ok "clock: 310s anchor → shows 5:1X (tolerant of ±2s)" \
+    || bad "clock: 310s anchor → shows 5:1X" "line 1: $line1"
+  # Red ANSI immediately precedes the clock string.
+  printf '%s' "$line1" | grep -qE '38;2;220;88;99[^0]*5:1[0-5]' \
+    && ok "clock: >=5min elapsed renders red (38;2;220;88;99)" \
+    || bad "clock: >=5min elapsed renders red" "line 1: $line1"
+
+  # 4. Boundary 10s BELOW 5min (290s) — dim, NOT red. Pins the threshold:
+  # any mutation dropping the flip below 290 (e.g., 60) would render this
+  # red and fail the second assertion.
+  python3 -c "import os, time; t=time.time()-290; os.utime('$CLOCK_FILE', (t, t))"
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -qE '4:5[0-9]' \
+    && ok "clock: 290s anchor → shows 4:5X (10s below threshold)" \
+    || bad "clock: 290s anchor → shows 4:5X" "line 1: $line1"
+  if printf '%s' "$line1" | grep -qE '38;2;220;88;99[^0]*4:5[0-9]'; then
+    bad "clock: 290s elapsed must NOT render red (below 300 threshold)" "line 1: $line1"
+  else
+    ok "clock: 290s elapsed must NOT render red (below 300 threshold)"
+  fi
+
+  # 5. Long elapsed: anchor 3700s ago → "1:01:4X" (h:mm:ss), red.
+  python3 -c "import os, time; t=time.time()-3700; os.utime('$CLOCK_FILE', (t, t))"
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -qE '1:01:4[0-5]' \
+    && ok "clock: 3700s anchor → 1:01:4X (h:mm:ss crossover)" \
+    || bad "clock: 3700s anchor → 1:01:4X" "line 1: $line1"
+
+  # 6. Anchor mtime is refreshed after the render to current time
+  # (the cache-warmth invariant: each render becomes the new anchor for next).
+  current=$(date +%s)
+  mtime=$(stat -f %m "$CLOCK_FILE" 2>/dev/null || stat -c %Y "$CLOCK_FILE" 2>/dev/null)
+  delta=$(( current - mtime ))
+  [ "$delta" -ge -2 ] && [ "$delta" -le 2 ] \
+    && ok "clock: anchor mtime refreshed to ~now after render (delta=$delta)" \
+    || bad "clock: anchor mtime refreshed to ~now after render" "delta=$delta (mtime=$mtime, now=$current)"
+
+  # 7. Per-session isolation: rendering with a different session_id must
+  # NOT touch our anchor (otherwise concurrent CC sessions would clobber
+  # each other's cache-age clocks).
+  python3 -c "import os, time; t=time.time()-100; os.utime('$CLOCK_FILE', (t, t))"
+  rm -f "$OTHER_FILE"
+  COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_OTHER" >/dev/null 2>&1
+  current=$(date +%s)
+  mtime=$(stat -f %m "$CLOCK_FILE" 2>/dev/null || stat -c %Y "$CLOCK_FILE" 2>/dev/null)
+  delta=$(( current - mtime ))
+  [ "$delta" -ge 98 ] && [ "$delta" -le 102 ] \
+    && ok "clock: per-session isolation (other session does NOT touch our anchor; delta=$delta)" \
+    || bad "clock: per-session isolation" "delta=$delta (expected ~100)"
+  # And the other session DID create its own anchor file.
+  [ -f "$OTHER_FILE" ] \
+    && ok "clock: per-session isolation (other session created its own anchor)" \
+    || bad "clock: per-session isolation" "other anchor $OTHER_FILE missing"
+
+  # 8. Narrow mode: clock STILL appears on line 1 (always-visible per design).
+  python3 -c "import os, time; t=time.time()-12; os.utime('$CLOCK_FILE', (t, t))"
+  out=$(COLUMNS=48 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_CLOCK" 2>/dev/null)
+  line1=$(echo "$out" | head -n 1)
+  echo "$line1" | grep -qE '0:1[234]' \
+    && ok "clock: visible in narrow mode (still on line 1)" \
+    || bad "clock: visible in narrow mode" "line 1: $line1"
+
+  rm -f "$CLOCK_FILE" "$OTHER_FILE" "$PRIOR_CLOCK"
 fi
 
 echo "----"

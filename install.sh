@@ -98,6 +98,7 @@ EXCL=(
   --exclude 'index/search.db' --exclude 'index/search.db-*'
   --exclude '.boot-context-*' --exclude '.boot-marker-*'
   --exclude '.replay-*' --exclude '.skip-replay-*'
+  --exclude '.statusline-clock-*'
   --exclude 'statusline-token-rate.log'
 )
 if command -v rsync >/dev/null 2>&1; then
@@ -109,6 +110,7 @@ else
       --exclude='index/search.db' --exclude='index/search.db-*' \
       --exclude='.boot-context-*' --exclude='.boot-marker-*' \
       --exclude='.replay-*' --exclude='.skip-replay-*' \
+      --exclude='.statusline-clock-*' \
       --exclude='statusline-token-rate.log' -cf - . ) \
     | ( cd "$PREFIX" && tar -xf - )
 fi

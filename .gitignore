@@ -3,6 +3,7 @@ hooks/.boot-context-*.tmp
 hooks/.boot-marker-*
 hooks/.replay-pid-*
 hooks/.replay-error-*
+hooks/.statusline-clock-*
 index/search.db
 index/search.db-*
 # statusline-token-rate.log lives in ~/.claude/ (hooks/log-token-rate.sh writes

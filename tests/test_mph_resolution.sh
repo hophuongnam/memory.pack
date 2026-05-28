@@ -76,6 +76,7 @@ rm -rf "$WT/index/__pycache__" 2>/dev/null || true
 HITS=$(grep -rnI --exclude-dir=__pycache__ \
   --exclude='.boot-context-*' --exclude='.boot-marker-*' \
   --exclude='.replay-*' --exclude='.skip-replay-*' \
+  --exclude='.statusline-clock-*' \
   --exclude='statusline-token-rate.log' \
   'Resilio\.Sync/Memory\.Pack' "$WT/hooks" "$WT/index" 2>/dev/null \
   | grep -vE ':[0-9]+:[[:space:]]*(#|//)' || true)
