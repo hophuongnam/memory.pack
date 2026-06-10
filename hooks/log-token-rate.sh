@@ -91,4 +91,15 @@ printf '%s\n' "$samples" | while IFS= read -r cum; do
   [ -z "$cum" ] && continue
   printf '%s %s %s\n' "$ts" "$session_id" "$cum" >> "$LOG"
 done
+
+# Rotate past 4000 lines down to the newest 2000. The statusline only ever
+# tails the last 16 per session, so the tail is all signal; without this
+# the log appended one line per turn forever. Runs AFTER the append so the
+# samples just written are inside the kept tail. tail+mv can drop a
+# concurrent Stop's sample — display log only, last-writer-wins is fine.
+lines=$(wc -l < "$LOG" 2>/dev/null | tr -d ' ')
+if [ -n "$lines" ] && [ "$lines" -gt 4000 ] 2>/dev/null; then
+  tail -n 2000 "$LOG" > "$LOG.tmp.$$" 2>/dev/null && mv "$LOG.tmp.$$" "$LOG"
+  rm -f "$LOG.tmp.$$" 2>/dev/null
+fi
 exit 0

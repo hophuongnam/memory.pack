@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, closeSync, openSyn
 import { dirname, basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { fmParse, fmSetInPlace, fmSerialize } from './_lib.mjs';
 
 const [, , memoryPath, sessionId] = process.argv;
 if (!memoryPath) process.exit(0);
@@ -49,51 +50,32 @@ try {
   process.exit(0);
 }
 
-// Parse frontmatter: must start with `---\n`, ends at next `---` on its own line.
-if (!body.startsWith('---\n')) process.exit(0);
-const end = body.indexOf('\n---\n', 4);
-if (end < 0) process.exit(0);
-
-const fmBlock = body.slice(4, end);
-const rest = body.slice(end + 5);
-
-const today = new Date().toISOString().slice(0, 10);
-
-// Read every key, leading-whitespace tolerant, so the stock system-prompt's
-// nested `metadata: { type }` shape and CC's intermittent `node_type:`
-// injection are both parsed. This map feeds the archive-promote path below
+// Parse frontmatter via the shared helper (_lib.mjs fmParse): every key is
+// read leading-whitespace tolerant, so the stock system-prompt's nested
+// `metadata: { type }` shape and CC's intermittent `node_type:` injection
+// are both parsed. The keys map feeds the archive-promote path below
 // (description/type/recall_count); it is NOT used to re-serialize. We never
 // restructure the file — shapes are tolerated on read, never mutated (see
 // SCHEMA.md). The Python indexer (`index-memories.py`) parses the same way
 // via `k.strip()`, so `type` resolves from any shape regardless of this hook.
-const lines = fmBlock.split('\n');
-const keys = new Map();
-for (const line of lines) {
-  const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-  if (m) keys.set(m[1], m[2]);
-}
+const fm = fmParse(body);
+if (!fm) process.exit(0);
+const { lines, keys, rest } = fm;
+
+const today = new Date().toISOString().slice(0, 10);
 
 const prevCount = parseInt(keys.get('recall_count') || '0', 10) || 0;
 const newCount = alreadyBumpedThisSession ? prevCount : prevCount + 1;
 
-// In-place edit: rewrite ONLY the two counter lines, preserving each line's
-// existing indentation; append at column 0 if absent. Every other byte of
-// the frontmatter — key order, the `metadata:` wrapper, indentation,
-// `node_type`, blank lines — is left exactly as the author/harness wrote it.
-const setInPlace = (key, value) => {
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*.*$/);
-    if (m && m[2] === key) {
-      lines[i] = `${m[1]}${key}: ${value}`;
-      return;
-    }
-  }
-  lines.push(`${key}: ${value}`);
-};
-setInPlace('recall_count', String(newCount));
-setInPlace('last_recalled', today);
+// In-place edit (shared fmSetInPlace): rewrite ONLY the two counter lines,
+// preserving each line's existing indentation; append at column 0 if
+// absent. Every other byte of the frontmatter — key order, the `metadata:`
+// wrapper, indentation, `node_type`, blank lines — is left exactly as the
+// author/harness wrote it.
+fmSetInPlace(lines, 'recall_count', String(newCount));
+fmSetInPlace(lines, 'last_recalled', today);
 
-const out = `---\n${lines.join('\n')}\n---\n${rest}`;
+const out = fmSerialize(lines, rest);
 
 // Preserve original mtime so `/memory-lint --decay` still sees the real
 // "last substantive write" time for legacy memories that lack a `created`

@@ -19,6 +19,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync, statSync, unlinkSync, appendFileSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
+import { fmParse, fmSetInPlace, fmSerialize } from './_lib.mjs';
 
 const [, , memoryPath] = process.argv;
 if (!memoryPath) process.exit(0);
@@ -56,26 +57,14 @@ try {
 }
 
 // Both files must have well-formed frontmatter for safe metadata transfer.
-function parseFrontmatter(text) {
-  if (!text.startsWith('---\n')) return null;
-  const end = text.indexOf('\n---\n', 4);
-  if (end < 0) return null;
-  const fmBlock = text.slice(4, end);
-  const rest = text.slice(end + 5);
-  const keys = new Map();
-  const order = [];
-  for (const line of fmBlock.split('\n')) {
-    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-    if (m) {
-      keys.set(m[1], m[2]);
-      if (!order.includes(m[1])) order.push(m[1]);
-    }
-  }
-  return { keys, order, rest };
-}
-
-const newFm = parseFrontmatter(newBody);
-const archiveFm = parseFrontmatter(archiveBody);
+// Shared fmParse (_lib.mjs): whitespace-tolerant key reads. The legacy
+// local parser collected only column-0 keys and re-serialized the file
+// from that map — nested `metadata:` children and any unmatched line were
+// silently DELETED from the resurrected memory. The shared helpers set
+// the three inherited keys IN PLACE and keep every other byte verbatim
+// (same never-reshape contract as update-recall.mjs; SCHEMA.md).
+const newFm = fmParse(newBody);
+const archiveFm = fmParse(archiveBody);
 
 // If either side is malformed, do nothing. The new write stays as-is and
 // the archive copy is left untouched for a human to inspect.
@@ -89,19 +78,11 @@ const today = new Date().toISOString().slice(0, 10);
 const archivedCreated = archiveFm.keys.get('created');
 const archivedRecallCount = archiveFm.keys.get('recall_count');
 
-if (archivedCreated) {
-  newFm.keys.set('created', archivedCreated);
-  if (!newFm.order.includes('created')) newFm.order.push('created');
-}
-if (archivedRecallCount) {
-  newFm.keys.set('recall_count', archivedRecallCount);
-  if (!newFm.order.includes('recall_count')) newFm.order.push('recall_count');
-}
-newFm.keys.set('last_reviewed', today);
-if (!newFm.order.includes('last_reviewed')) newFm.order.push('last_reviewed');
+if (archivedCreated) fmSetInPlace(newFm.lines, 'created', archivedCreated);
+if (archivedRecallCount) fmSetInPlace(newFm.lines, 'recall_count', archivedRecallCount);
+fmSetInPlace(newFm.lines, 'last_reviewed', today);
 
-const mergedFm = newFm.order.map((k) => `${k}: ${newFm.keys.get(k)}`).join('\n');
-const out = `---\n${mergedFm}\n---\n${newFm.rest}`;
+const out = fmSerialize(newFm.lines, newFm.rest);
 
 // Atomic write: tmp + rename.
 const tmp = `${memoryPath}.resurrect.tmp`;

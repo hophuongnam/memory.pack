@@ -202,8 +202,13 @@ fi
 
 # Safety-net sweep mirroring session-end.sh:46 — catches markers left behind
 # when SessionEnd didn't fire (CC crash, kill, OS reboot). Same 3-day threshold.
+# Also removes any .statusline-clock-* anchors: the cache-age clock was
+# removed 2026-06-10 (event-driven statusline can't tick — see
+# reference_cc_statusline_event_driven.md), so every such file is legacy
+# litter; this self-cleans hosts that ever ran the clock build.
 if [ "$EVENT" = "SessionStart" ]; then
   find "$SCRIPT_DIR" -maxdepth 1 -name '.boot-marker-*' -mtime +3 -delete 2>/dev/null
+  find "$SCRIPT_DIR" -maxdepth 1 -name '.statusline-clock-*' -delete 2>/dev/null
 fi
 
 if [ -n "$CONTEXT" ]; then

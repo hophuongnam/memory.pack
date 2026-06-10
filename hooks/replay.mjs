@@ -10,7 +10,7 @@
 //      ~/.claude/projects/<slug>/memory/PENDING_MEMORIES.md for human-in-the-
 //      loop review by a future session.
 
-import { resolveSdkSpecifier } from './_lib.mjs';
+import { resolveSdkSpecifier, extractConversation, truncateConversation } from './_lib.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -54,22 +54,12 @@ if (!msgs || msgs.length === 0) {
   bail(2, `getSessionMessages returned empty for session ${sessionId}`);
 }
 
-// Extract user/assistant text
-const conversation = [];
-for (const m of msgs) {
-  if (m.type === 'user' && typeof m.message?.content === 'string') {
-    conversation.push(`USER: ${m.message.content}`);
-  } else if (m.type === 'assistant') {
-    for (const block of (m.message?.content || [])) {
-      if (block.type === 'text' && block.text) {
-        conversation.push(`ASSISTANT: ${block.text}`);
-        break;
-      }
-    }
-  }
-}
-
-const transcript = conversation.join('\n');
+// Extract user/assistant text (shared, isMeta/tool_result-aware — see
+// _lib.mjs extractConversation) and bound it so a long session cannot
+// blow the prompt past the model context (truncateConversation keeps
+// head + tail around an elision marker). Both passes embed the same
+// truncated transcript.
+const transcript = truncateConversation(extractConversation(msgs));
 if (!transcript.trim()) {
   bail(2, `transcript had ${msgs.length} raw messages but no user/assistant text — likely all tool calls`);
 }

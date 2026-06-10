@@ -89,6 +89,46 @@ _mp_resolve_project_key() {
   printf '%s' "$_mp_fallback"
 }
 
+# _mp_real_user_turns: count REAL user turns in a CC transcript jsonl,
+# printed as a bare integer (0 on missing/empty/unreadable transcript).
+#
+# "type":"user" entries are NOT user turns in general: tool_results come
+# back as user-type entries with array content, and isMeta:true entries are
+# CC/engine bookkeeping (system-reminders, auto-save-stop feedback) injected
+# MID-turn — a real 594-line transcript held 153 user-type entries but only
+# 2 real prompts. A REAL turn is: type=="user", not isMeta, content either
+# a string without <command-message> (slash-command invocations are not
+# exchanges) or an array with no tool_result block. This mirrors
+# log-token-rate.sh's mutation-pinned is_user_prompt semantics
+# (reference_cc_transcript_isMeta_mid_turn.md); keep the two in sync.
+#
+# Used by session-end.sh (trivial-session replay skip) and
+# auto-save-stop.sh (SAVE_INTERVAL checkpoint counting). The per-line
+# `fromjson? // empty` pass drops the malformed tail line CC can leave
+# mid-write instead of crashing the count.
+_mp_real_user_turns() {
+  _mp_t="$1"
+  if [ -z "$_mp_t" ] || [ ! -f "$_mp_t" ]; then
+    printf '0'
+    return 0
+  fi
+  _mp_n=$(jq -cR 'fromjson? // empty' "$_mp_t" 2>/dev/null | jq -sr '
+    [ .[] | select(
+        .type == "user"
+        and ((.isMeta // false) | not)
+        and (
+          (.message.content | type) as $ct |
+          if   $ct == "string" then (.message.content | contains("<command-message>") | not)
+          elif $ct == "array"  then ([.message.content[].type] | index("tool_result")) == null
+          else false end
+        )
+      ) ] | length' 2>/dev/null)
+  case "$_mp_n" in
+    ''|*[!0-9]*) printf '0' ;;
+    *) printf '%s' "$_mp_n" ;;
+  esac
+}
+
 # _mp_have_nerdfont: returns 0 if a Nerd Font is available for the statusline
 # icon set, 1 otherwise. Env override MEMORY_PACK_NERDFONT={1,true,yes} forces
 # yes, MEMORY_PACK_NERDFONT={0,false,no} forces no, empty/unset falls through

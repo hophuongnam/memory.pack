@@ -6,10 +6,11 @@
 
 INPUT=$(cat)
 
-TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
+# Bilingual snake↔camel per invariant #3 (reference_cc_hook_input_fields.md).
+TOOL=$(echo "$INPUT" | jq -r '.tool_name // .toolName // empty')
 [ "$TOOL" = "Write" ] || exit 0
 
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+FILE_PATH=$(echo "$INPUT" | jq -r '(.tool_input // .toolInput // {}).file_path // empty')
 [ -n "$FILE_PATH" ] || exit 0
 
 # Only memory files under ~/.claude/projects/<slug>/memory/. Skip writes

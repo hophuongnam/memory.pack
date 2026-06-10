@@ -35,6 +35,11 @@ PROJECT_NAME=$(basename "$PROJECT_KEY" 2>/dev/null)
 BOOT_CTX="$SCRIPT_DIR/.boot-context-${PROJECT_HASH}"
 PID_FILE="$SCRIPT_DIR/.replay-pid-${PROJECT_HASH}"
 ERR_MARKER="$SCRIPT_DIR/.replay-error-${PROJECT_HASH}"
+# Per-project stderr log (NOT a fixed /tmp path: concurrent replays from
+# different projects clobbered a shared /tmp/replay-error.log and the
+# synthetic failure boot-context could embed the WRONG project's error).
+# Name sits inside the existing .replay-* gitignore/install excludes.
+ERR_LOG="$SCRIPT_DIR/.replay-error-${PROJECT_HASH}.log"
 
 # Carry-forward: when this session's replay is skipped — either by the
 # user opt-out sentinel or the trivial-session auto-skip below — the next
@@ -73,13 +78,13 @@ if [ -f "$SKIP_SENTINEL" ]; then
   exit 0
 fi
 
-# Skip trivial sessions (≤5 user turns), but still carry the prior boot
-# context forward so the next real session isn't amnesiac about the last
-# meaningful one.
-TURNS=0
-if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-  TURNS=$(grep -c '"type":"user"' "$TRANSCRIPT" 2>/dev/null || echo 0)
-fi
+# Skip trivial sessions (≤5 REAL user turns), but still carry the prior
+# boot context forward so the next real session isn't amnesiac about the
+# last meaningful one. _mp_real_user_turns excludes tool_results / isMeta /
+# slash-command entries — the old grep -c '"type":"user"' counted every
+# tool_result, so any session with ≥4 tool calls cleared the bar and got a
+# (paid) replay it didn't deserve.
+TURNS=$(_mp_real_user_turns "$TRANSCRIPT")
 if [ "$TURNS" -le 5 ]; then
   carry_forward "session had $TURNS user turn(s) — too short to replay"
   exit 0
@@ -91,10 +96,11 @@ REAL_DIR="$(cd "$SCRIPT_DIR" && cd "$(dirname "$(readlink "$SCRIPT_PATH" 2>/dev/
 REPLAY="$REAL_DIR/replay.mjs"
 [ ! -f "$REPLAY" ] && REPLAY="$SCRIPT_DIR/replay.mjs"
 
-# Clean stale boot context, PID file, and error marker for this project.
-# The error marker is only meaningful between runs — the new run either
-# clears it (success / benign no-op) or re-writes it (failure).
-rm -f "$BOOT_CTX" "$BOOT_CTX.tmp" "$PID_FILE" "$ERR_MARKER"
+# Clean stale boot context, tmp files (legacy .tmp and the .tmp.<pid>
+# family), PID file, error marker, and error log for this project. The
+# error marker/log are only meaningful between runs — the new run either
+# clears them (success / benign no-op) or re-writes them (failure).
+rm -f "$BOOT_CTX" "$BOOT_CTX".tmp* "$PID_FILE" "$ERR_MARKER" "$ERR_LOG"
 
 # Drop this session's boot marker and prune stale markers (>3 days).
 [ -n "$SESSION_ID" ] && rm -f "$SCRIPT_DIR/.boot-marker-${SESSION_ID}"
@@ -111,26 +117,49 @@ find "$SCRIPT_DIR" -maxdepth 1 -name '.boot-marker-*' -mtime +3 -delete 2>/dev/n
 #                                        macOS "failed" notification.
 #
 # The synthetic boot-context mimics replay.mjs's TITLE/SUMMARY/TODO/DECISIONS
-# format so boot-inject.sh treats it uniformly. The SUMMARY embeds the tail of
-# /tmp/replay-error.log so the failure is self-reporting — no need to cat a log.
-nohup sh -c "echo \$\$ >\"$PID_FILE\"; \
-  osascript -e 'display notification \"Replay started\" with title \"Claude Code · $PROJECT_NAME\"' >/dev/null 2>&1 || true; \
-  node \"$REPLAY\" \"$SESSION_ID\" \"$PROJECT_KEY\" \
-  >\"$BOOT_CTX.tmp\" 2>/tmp/replay-error.log; \
-  STATUS=\$?; \
-  if [ \$STATUS -eq 0 ] && [ -s \"$BOOT_CTX.tmp\" ]; then \
-    mv \"$BOOT_CTX.tmp\" \"$BOOT_CTX\"; \
-    rm -f \"$ERR_MARKER\"; \
-    osascript -e 'display notification \"Replay finished\" with title \"Claude Code · $PROJECT_NAME\"' >/dev/null 2>&1 || true; \
-  elif [ \$STATUS -eq 2 ]; then \
-    rm -f \"$BOOT_CTX.tmp\" \"$ERR_MARKER\"; \
-  else \
-    rm -f \"$BOOT_CTX.tmp\"; \
-    ERR_TAIL=\$(tail -c 400 /tmp/replay-error.log 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//'); \
-    [ -z \"\$ERR_TAIL\" ] && ERR_TAIL=\"(no stderr captured; exit \$STATUS with empty stdout)\"; \
-    printf 'TITLE: Replay failed for prior session\nSUMMARY: replay.mjs exited %s. stderr tail: %s\nTODO: investigate /tmp/replay-error.log and Memory.Pack/hooks/replay.mjs — the prior session was not summarized\nDECISIONS: none\n' \"\$STATUS\" \"\$ERR_TAIL\" > \"$BOOT_CTX\"; \
-    printf 'exit=%s\nreason=%s\n' \"\$STATUS\" \"\$ERR_TAIL\" > \"$ERR_MARKER\"; \
-    osascript -e 'display notification \"Replay failed — see /tmp/replay-error.log\" with title \"Claude Code · $PROJECT_NAME\"' >/dev/null 2>&1 || true; \
-  fi; \
-  rm -f \"$PID_FILE\"" </dev/null &>/dev/null &
+# format so boot-inject.sh treats it uniformly. The SUMMARY embeds the tail
+# of the per-project error log so the failure is self-reporting.
+#
+# Every dynamic value crosses into the detached shell via `env` — the body
+# is one STATIC single-quoted script with zero interpolation. The previous
+# interpolated form was a parse error for any project path containing a
+# quote (e.g. "Nam's Proj"): the detached sh died before `echo $$`, so no
+# replay, no PID file, no error marker — the silent-amnesia class. The
+# notification title is additionally stripped of `"` and `\` because it
+# lands inside an AppleScript double-quoted string literal.
+MP_NOTIFY_TITLE="Claude Code · $(printf '%s' "$PROJECT_NAME" | tr -d '"\\')"
+# Stdout goes to a per-process tmp ($$ of the detached sh) so two
+# concurrent same-project replays can't interleave one tmp file; the final
+# mv is last-writer-wins, atomic either way.
+nohup env \
+  MP_PID_FILE="$PID_FILE" \
+  MP_BOOT_CTX="$BOOT_CTX" \
+  MP_ERR_MARKER="$ERR_MARKER" \
+  MP_ERR_LOG="$ERR_LOG" \
+  MP_REPLAY="$REPLAY" \
+  MP_SESSION_ID="$SESSION_ID" \
+  MP_PROJECT_KEY="$PROJECT_KEY" \
+  MP_NOTIFY_TITLE="$MP_NOTIFY_TITLE" \
+  sh -c '
+    echo $$ > "$MP_PID_FILE"
+    osascript -e "display notification \"Replay started\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true
+    MP_TMP="$MP_BOOT_CTX.tmp.$$"
+    node "$MP_REPLAY" "$MP_SESSION_ID" "$MP_PROJECT_KEY" > "$MP_TMP" 2> "$MP_ERR_LOG"
+    STATUS=$?
+    if [ "$STATUS" -eq 0 ] && [ -s "$MP_TMP" ]; then
+      mv "$MP_TMP" "$MP_BOOT_CTX"
+      rm -f "$MP_ERR_MARKER" "$MP_ERR_LOG"
+      osascript -e "display notification \"Replay finished\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true
+    elif [ "$STATUS" -eq 2 ]; then
+      rm -f "$MP_TMP" "$MP_ERR_MARKER" "$MP_ERR_LOG"
+    else
+      rm -f "$MP_TMP"
+      ERR_TAIL=$(tail -c 400 "$MP_ERR_LOG" 2>/dev/null | tr "\n" " " | sed "s/  */ /g; s/^ *//; s/ *\$//")
+      [ -z "$ERR_TAIL" ] && ERR_TAIL="(no stderr captured; exit $STATUS with empty stdout)"
+      printf "TITLE: Replay failed for prior session\nSUMMARY: replay.mjs exited %s. stderr tail: %s\nTODO: investigate %s and Memory.Pack/hooks/replay.mjs — the prior session was not summarized\nDECISIONS: none\n" "$STATUS" "$ERR_TAIL" "$MP_ERR_LOG" > "$MP_BOOT_CTX"
+      printf "exit=%s\nreason=%s\n" "$STATUS" "$ERR_TAIL" > "$MP_ERR_MARKER"
+      osascript -e "display notification \"Replay failed — see $MP_ERR_LOG\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true
+    fi
+    rm -f "$MP_PID_FILE"
+  ' </dev/null >/dev/null 2>&1 &
 disown

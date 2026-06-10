@@ -13,15 +13,37 @@ SAVE_INTERVAL=50
 STATE_DIR="$HOME/.claude/hook_state"
 mkdir -p "$STATE_DIR"
 
+# GC — this state grew unboundedly before (759 per-session files + 478KB
+# log observed 2026-06-10): prune per-session save markers older than 7
+# days and rotate hook.log past 512KB down to its newest 500 lines.
+# tail+mv rotation can lose a concurrent Stop's log line — debug log only,
+# never engine state, so last-writer-wins is acceptable.
+find "$STATE_DIR" -name '*_last_save' -type f -mtime +7 -delete 2>/dev/null
+if [ -f "$STATE_DIR/hook.log" ]; then
+    _log_bytes=$(wc -c < "$STATE_DIR/hook.log" 2>/dev/null | tr -d ' ')
+    if [ -n "$_log_bytes" ] && [ "$_log_bytes" -gt 524288 ] 2>/dev/null; then
+        tail -n 500 "$STATE_DIR/hook.log" > "$STATE_DIR/hook.log.tmp.$$" 2>/dev/null \
+            && mv "$STATE_DIR/hook.log.tmp.$$" "$STATE_DIR/hook.log"
+        rm -f "$STATE_DIR/hook.log.tmp.$$" 2>/dev/null
+    fi
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared turn counter lives in _lib.sh. If sourcing fails, let the stop
+# through quietly — auto-save is a nicety, never worth blocking CC over.
+. "$SCRIPT_DIR/_lib.sh" 2>/dev/null || { echo "{}"; exit 0; }
+
 # Read JSON input from stdin
 INPUT=$(cat)
 
-# Parse fields
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null)
+# Parse fields. Bilingual snake↔camel per invariant #3 — CC's stdin field
+# naming drifts between releases (see reference_cc_hook_input_fields.md);
+# a snake-only read here silently disables auto-save when camelCase arrives.
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // "unknown"' 2>/dev/null)
 SESSION_ID=$(echo "$SESSION_ID" | tr -cd 'a-zA-Z0-9_-')
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown"
-STOP_HOOK_ACTIVE=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('stop_hook_active', False))" 2>/dev/null)
-TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))" 2>/dev/null)
+STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // .stopHookActive // false' 2>/dev/null)
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // ""' 2>/dev/null)
 TRANSCRIPT_PATH="${TRANSCRIPT_PATH/#\~/$HOME}"
 
 # If already in a save cycle, let the AI stop normally
@@ -30,29 +52,12 @@ if [ "$STOP_HOOK_ACTIVE" = "True" ] || [ "$STOP_HOOK_ACTIVE" = "true" ]; then
     exit 0
 fi
 
-# Count human messages in the JSONL transcript
-if [ -f "$TRANSCRIPT_PATH" ]; then
-    EXCHANGE_COUNT=$(python3 - "$TRANSCRIPT_PATH" <<'PYEOF'
-import json, sys
-count = 0
-with open(sys.argv[1]) as f:
-    for line in f:
-        try:
-            entry = json.loads(line)
-            msg = entry.get('message', {})
-            if isinstance(msg, dict) and msg.get('role') == 'user':
-                content = msg.get('content', '')
-                if isinstance(content, str) and '<command-message>' in content:
-                    continue
-                count += 1
-        except:
-            pass
-print(count)
-PYEOF
-2>/dev/null)
-else
-    EXCHANGE_COUNT=0
-fi
+# Count REAL human exchanges in the JSONL transcript. The old role=="user"
+# count included tool_results (array-content user entries) and isMeta
+# bookkeeping, so "50 exchanges" actually meant ~50 transcript entries — a
+# handful of real turns in tool-heavy sessions (hook.log shows triggers at
+# "exchange 179/237"). _mp_real_user_turns counts only genuine prompts.
+EXCHANGE_COUNT=$(_mp_real_user_turns "$TRANSCRIPT_PATH")
 
 # Track last save point for this session
 LAST_SAVE_FILE="$STATE_DIR/${SESSION_ID}_last_save"
