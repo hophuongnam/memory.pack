@@ -205,5 +205,46 @@ case "$SL_OUT3" in
   *) ok "statusline does NOT honor a SUB-hash-only sentinel (parity check)" ;;
 esac
 
+# --- layer 5: statusline memory-indicator parity (invariant #4 read side) --
+# The mem_dir lookup must use the SAME transcript-anchored project key and
+# the SAME [/.] → - slug encoding as the engine. The legacy code derived it
+# from raw workspace.project_dir with a [^a-zA-Z0-9] → - encoding:
+#   * empty project_dir (the documented CC bug the resolver exists for) or
+#     a mid-session `cd` → wrong/missing store → indicator silently absent
+#   * any path containing `_` encodes differently than CC's slug → ditto
+SID4="test-slug-anchor-3333"
+TRANSCRIPT4="$TRANSCRIPT_DIR/$SID4.jsonl"
+: > "$TRANSCRIPT4"
+# Memory store with a known line count at the PARENT slug.
+printf '%s\n' 1 2 3 4 5 6 7 8 9 10 > "$TRANSCRIPT_DIR/memory/MEMORY.md"
+
+# Real bug shape: workspace EMPTY, cwd in subfolder, transcript at PARENT.
+SL_STDIN4="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","workspace":{},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID4" "$TRANSCRIPT4" "$SUB_REAL")"
+SL_OUT4="$(printf '%s' "$SL_STDIN4" | HOME="$FAKE_HOME" "$SL_LINK" 2>/dev/null || true)"
+case "$SL_OUT4" in
+  *"10/150"*) ok "statusline mem indicator resolves store via transcript anchor (project_dir empty, cwd=subfolder)" ;;
+  *) bad "statusline mem indicator resolves store via transcript anchor (project_dir empty, cwd=subfolder)" \
+         "expected '10/150' | out=[$SL_OUT4]" ;;
+esac
+
+# Encoding pin: underscore survives CC's [/.] → - slug; the legacy
+# [^a-zA-Z0-9] → - encoding flattened it and missed the store.
+PARENT_U="$TMP/Under_Score.Proj"
+mkdir -p "$PARENT_U"
+PARENT_U_SLUG="$(printf '%s' "$PARENT_U" | sed 's|[/.]|-|g')"
+TRANSCRIPT_DIR_U="$FAKE_HOME/.claude/projects/$PARENT_U_SLUG"
+mkdir -p "$TRANSCRIPT_DIR_U/memory"
+printf '%s\n' 1 2 3 4 5 6 7 8 9 10 11 12 > "$TRANSCRIPT_DIR_U/memory/MEMORY.md"
+SID5="test-slug-anchor-4444"
+TRANSCRIPT5="$TRANSCRIPT_DIR_U/$SID5.jsonl"
+: > "$TRANSCRIPT5"
+SL_STDIN5="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID5" "$TRANSCRIPT5" "$PARENT_U" "$PARENT_U")"
+SL_OUT5="$(printf '%s' "$SL_STDIN5" | HOME="$FAKE_HOME" "$SL_LINK" 2>/dev/null || true)"
+case "$SL_OUT5" in
+  *"12/150"*) ok "statusline mem indicator uses engine slug encoding (underscore path)" ;;
+  *) bad "statusline mem indicator uses engine slug encoding (underscore path)" \
+         "expected '12/150' | out=[$SL_OUT5]" ;;
+esac
+
 echo "----"
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fail FAILED"; exit 1; fi

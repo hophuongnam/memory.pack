@@ -12,16 +12,34 @@
 input=$(cat)
 
 # --- Stdin fields (session-specific) ---
-project_dir=$(echo "$input"   | jq -r '.workspace.project_dir                       // .workspace.projectDir                        // empty')
+# ONE jq pass for all fields. Each jq fork is ~30-40ms (measured in
+# boot-inject.sh, which collapsed its serial calls for the same reason);
+# the statusline re-renders on every CC event, so 11 per-field forks
+# burned ~400ms per render. Fields are joined with the \u001f unit
+# separator — unlike tab, a NON-whitespace IFS char delimits strictly
+# under `read`, so empty fields (rate_limits absent until the first API
+# response) survive positionally instead of collapsing. Values cannot
+# contain U+001F or newlines (paths, ids, numbers, display names).
+# Snake↔camel fallbacks per invariant #3.
+US=$(printf '\037')
+mp_fields=$(echo "$input" | jq -r '[
+    (.workspace.project_dir                  // .workspace.projectDir               // ""),
+    (.cwd // .workspace.current_dir          // .workspace.currentDir               // ""),
+    (.model.display_name                     // .model.displayName                  // ""),
+    (.context_window.used_percentage         // .contextWindow.usedPercentage       // "" | tostring),
+    (.transcript_path                        // .transcriptPath                     // ""),
+    (.session_id                             // .sessionId                          // ""),
+    (.rate_limits.five_hour.used_percentage  // .rateLimits.fiveHour.usedPercentage // "" | tostring),
+    (.rate_limits.five_hour.resets_at        // .rateLimits.fiveHour.resetsAt       // "" | tostring),
+    (.rate_limits.seven_day.used_percentage  // .rateLimits.sevenDay.usedPercentage // "" | tostring),
+    (.rate_limits.seven_day.resets_at        // .rateLimits.sevenDay.resetsAt       // "" | tostring)
+  ] | join("\u001f")')
+IFS=$US read -r project_dir cwd model ctx transcript session_id \
+                five_h five_h_reset seven_d seven_d_reset <<EOF
+$mp_fields
+EOF
+unset IFS
 dir=$(basename "$project_dir")
-model=$(echo "$input"         | jq -r '.model.display_name                          // .model.displayName                           // empty')
-ctx=$(echo "$input"           | jq -r '.context_window.used_percentage              // .contextWindow.usedPercentage                // empty')
-transcript=$(echo "$input"    | jq -r '.transcript_path                             // .transcriptPath                              // empty')
-session_id=$(echo "$input"    | jq -r '.session_id                                  // .sessionId                                   // empty')
-five_h=$(echo "$input"        | jq -r '.rate_limits.five_hour.used_percentage       // .rateLimits.fiveHour.usedPercentage           // empty')
-five_h_reset=$(echo "$input"  | jq -r '.rate_limits.five_hour.resets_at             // .rateLimits.fiveHour.resetsAt                 // empty')
-seven_d=$(echo "$input"       | jq -r '.rate_limits.seven_day.used_percentage       // .rateLimits.sevenDay.usedPercentage           // empty')
-seven_d_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at             // .rateLimits.sevenDay.resetsAt                 // empty')
 
 # --- Vibe coding method ---
 vibe=""
@@ -113,9 +131,26 @@ SL_PATH="$SL_DIR/$(basename "$0")"
 MP_HOOKS_DIR="$(cd "$SL_DIR" && cd "$(dirname "$(readlink "$SL_PATH" 2>/dev/null || echo "$SL_PATH")")" && pwd)/hooks"
 HOOKS_DIR="$MP_HOOKS_DIR"
 
-# Find memory dir for current project (encode project_dir path)
-if [ -n "$project_dir" ]; then
-    encoded_proj=$(echo "$project_dir" | sed 's|[^a-zA-Z0-9]|-|g')
+# Resolve PROJECT_KEY against CC's slug (transcript-anchored, falling back
+# project_dir → cwd like the hooks' ${PROJECT_DIR:-${CWD:-…}} chain) so
+# every project-scoped read below — memory dir AND .skip-replay-<hash> —
+# matches the hooks' derivation even when workspace.project_dir is empty
+# or the user cd'd into a subfolder mid-session (invariants #2/#4).
+proj_key=$(mp_resolve_project_key "$transcript" "${project_dir:-$cwd}")
+proj_hash=""
+if [ -n "$proj_key" ]; then
+    proj_hash=$(printf '%s' "$proj_key" | mp_proj_hash 2>/dev/null)
+fi
+# Display name follows the resolved project root (project_dir when CC sent
+# one and no better ancestor matched; the slug-anchored root otherwise).
+[ -n "$proj_key" ] && dir=$(basename "$proj_key")
+
+# Find memory dir for the current project. Slug encoding MUST be the
+# engine's `[/.] → -` (boot-inject.sh / replay.mjs / index-memories.py —
+# invariant #4); the legacy [^a-zA-Z0-9] → - flattened `_` and friends
+# into `-`, silently hiding the indicator for any such project path.
+if [ -n "$proj_key" ]; then
+    encoded_proj=$(printf '%s' "$proj_key" | sed 's|[/.]|-|g')
     mem_dir="$MEMORY_BASE/$encoded_proj/memory"
     if [ -d "$mem_dir" ]; then
         mem_lines=$(wc -l < "$mem_dir/MEMORY.md" 2>/dev/null | tr -d ' ')
@@ -157,15 +192,10 @@ fi
 
 # Skip-replay opt-out: session-end.sh skips this session's replay when the
 # per-project sentinel .skip-replay-<hash> exists (user asked to "skip
-# replay"). <hash> = first 8 hex of md5(project_dir), exactly as derived in
-# session-end.sh:28 / boot-inject.sh:35. Surface it so continuity being
+# replay"). <hash> = first 8 hex of md5(project key), exactly as derived in
+# session-end.sh / boot-inject.sh. proj_key/proj_hash were resolved above
+# (shared with the memory-dir lookup). Surface it so continuity being
 # opted out for this session is visible rather than silent.
-# Resolve PROJECT_KEY against CC's slug (transcript-anchored) so the hash
-# matches hooks' derivation even when workspace.project_dir is empty.
-proj_key=$(mp_resolve_project_key "$transcript" "$project_dir")
-if [ -n "$proj_key" ]; then
-    proj_hash=$(printf '%s' "$proj_key" | mp_proj_hash 2>/dev/null)
-fi
 
 # --- Source render helpers ---
 # SL_DIR / MP_HOOKS_DIR already resolved above.
@@ -273,38 +303,9 @@ if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
   fi
 fi
 
-# Cache-age clock: time since previous statusline render, per session.
-# Anchor file's mtime IS the previous render's timestamp; this render reads
-# it, computes (now - mtime), then touches the file so the next render
-# measures from here. Anthropic's prompt-cache TTL is 5min — at elapsed
-# >= 300s the cache is definitely cold and the next assistant turn pays
-# the full re-warm cost, so we flip dim → red there. Always-visible on
-# Line 1 in every width mode (never dropped, narrow included). Sandwiched
-# between the model pill and git_part so the cache-warmth signal sits
-# next to the model identity it's about. BSD `stat -f %m` first (macOS is
-# the dev host), GNU `stat -c %Y` fallback (Linux + WSL2). Stat failure
-# or missing file → elapsed=0 (renders harmlessly as "0:00"). The touch
-# is the load-bearing side-effect; if it silently no-ops the clock just
-# stays at 0:00 forever, never wrong, never red.
-clock_part=""
-if [ -n "$session_id" ]; then
-  clock_file="$MP_HOOKS_DIR/.statusline-clock-${session_id}"
-  elapsed=0
-  if [ -f "$clock_file" ]; then
-    prev_mtime=$(stat -f %m "$clock_file" 2>/dev/null || stat -c %Y "$clock_file" 2>/dev/null)
-    if [ -n "$prev_mtime" ] && [ "$prev_mtime" -gt 0 ] 2>/dev/null; then
-      elapsed=$(( $(date +%s) - prev_mtime ))
-      [ "$elapsed" -lt 0 ] && elapsed=0
-    fi
-  fi
-  touch "$clock_file" 2>/dev/null
-  clock_str=$(mp_clock_format "$elapsed")
-  if [ "$elapsed" -ge 300 ] 2>/dev/null; then
-    clock_part=" $(ansi_fg "$THEME_FG_MEMORY_CRIT")${clock_str}${RESET}"
-  else
-    clock_part=" \033[2m${clock_str}${RESET}"
-  fi
-fi
+# (Cache-age clock removed 2026-06-10: CC re-invokes the statusline on
+# EVENTS, not a timer, so the "age" was a stale per-render snapshot — and
+# each session leaked a never-GC'd anchor dotfile into hooks/.)
 
 # Memory indicator (3-step ladder)
 mem_part=""
@@ -355,8 +356,8 @@ overlay=""
 [ -n "$skip_themed" ]        && overlay="${overlay:+${overlay} }${skip_themed}"
 [ -n "$overlay" ]            && cont_display="${sep}${overlay}"
 
-printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b%b\n" \
-  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$clock_part" "$git_part" "$cont_display"
+printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b\n" \
+  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$git_part" "$cont_display"
 
 # --- Line 2 ---
 parts=""
