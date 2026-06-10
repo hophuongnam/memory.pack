@@ -78,16 +78,44 @@ if [ -f "$SKIP_SENTINEL" ]; then
   exit 0
 fi
 
-# Skip trivial sessions (≤5 REAL user turns), but still carry the prior
-# boot context forward so the next real session isn't amnesiac about the
-# last meaningful one. _mp_real_user_turns excludes tool_results / isMeta /
-# slash-command entries — the old grep -c '"type":"user"' counted every
-# tool_result, so any session with ≥4 tool calls cleared the bar and got a
-# (paid) replay it didn't deserve.
+# Skip trivial sessions, but still carry the prior boot context forward so
+# the next real session isn't amnesiac about the last meaningful one.
+# _mp_real_user_turns excludes tool_results / isMeta / slash-command
+# entries — the old grep -c '"type":"user"' counted every tool_result, so
+# any session with ≥4 tool calls cleared the bar and got a (paid) replay
+# it didn't deserve.
+#
+# Turn count alone also fails in the OTHER direction: a 1-2-prompt session
+# can drive an hour of autonomous work worth replaying (measured
+# 2026-06-10 across 1535 non-empty ≤5-turn transcripts on this host: one
+# real 2-turn session was 1.1MB raw holding only ~10k conversation chars;
+# a 1-turn session held 49k conversation chars in 51KB raw). A ≤5-turn
+# session is therefore rescued when it is big on EITHER axis:
+#   chars — _mp_conversation_chars (≈ what replay would summarize)
+#           ≥ MP_REPLAY_MIN_CHARS (default 25000; the median replayed
+#           >5-turn session holds ~32k)
+#   bytes — raw transcript size ≥ MP_REPLAY_MIN_BYTES (default 200000;
+#           trivial interactive sessions top out ~120KB, autonomous
+#           monsters start ~250KB — their bulk is tool_results, which the
+#           chars axis can't see)
+# 0-turn sessions always skip: headless/programmatic runs (no real prompt)
+# have no human thread to carry and would spam SESSIONS.md.
 TURNS=$(_mp_real_user_turns "$TRANSCRIPT")
 if [ "$TURNS" -le 5 ]; then
-  carry_forward "session had $TURNS user turn(s) — too short to replay"
-  exit 0
+  RESCUE=0
+  if [ "$TURNS" -gt 0 ]; then
+    CONV_CHARS=$(_mp_conversation_chars "$TRANSCRIPT")
+    RAW_BYTES=$(wc -c 2>/dev/null < "$TRANSCRIPT" | tr -d '[:space:]')
+    case "$RAW_BYTES" in ''|*[!0-9]*) RAW_BYTES=0 ;; esac
+    if [ "$CONV_CHARS" -ge "${MP_REPLAY_MIN_CHARS:-25000}" ] \
+       || [ "$RAW_BYTES" -ge "${MP_REPLAY_MIN_BYTES:-200000}" ]; then
+      RESCUE=1
+    fi
+  fi
+  if [ "$RESCUE" -eq 0 ]; then
+    carry_forward "session had $TURNS user turn(s) — too short to replay"
+    exit 0
+  fi
 fi
 
 # Resolve replay script location (follow symlinks to find co-located replay.mjs)

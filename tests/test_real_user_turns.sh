@@ -14,8 +14,19 @@
 # array carrying no tool_result block. Mirrors log-token-rate.sh's
 # mutation-pinned is_user_prompt (reference_cc_transcript_isMeta_mid_turn.md).
 #
-# Layers: 1) _lib.sh helper unit; 2) session-end.sh behavioral (trivial-skip
-# + carry-forward vs replay launch, with node stubbed via PATH); 3)
+# Turn count alone is still a bad trivialness proxy in the other direction:
+# a 1-2-prompt session can drive an hour of autonomous work (measured
+# 2026-06-10: a real 2-turn session was 1.1MB raw with ~10k conversation
+# chars; another 1-turn session held 49k conversation chars). session-end's
+# skip gate therefore rescues ≤5-turn sessions that are big on EITHER axis:
+# conversation chars (_mp_conversation_chars, mirrors extractConversation)
+# ≥ MP_REPLAY_MIN_CHARS, or raw transcript bytes ≥ MP_REPLAY_MIN_BYTES.
+# 0-turn sessions (headless/programmatic) always skip.
+#
+# Layers: 1) _lib.sh helper units (_mp_real_user_turns +
+# _mp_conversation_chars); 2) session-end.sh behavioral (trivial-skip
+# + carry-forward vs replay launch, with node stubbed via PATH, incl. the
+# substance-rescue axes + knobs + 0-turn guard); 3)
 # auto-save-stop.sh behavioral (tool-heavy session must NOT trigger).
 
 set -u
@@ -66,6 +77,40 @@ got=$(_mp_real_user_turns "$SBX/empty.jsonl" 2>/dev/null)
 printf '{"type":"user","message":{"content":"ok"}}\n{"broken json\n' > "$SBX/broken.jsonl"
 got=$(_mp_real_user_turns "$SBX/broken.jsonl" 2>/dev/null)
 [ "$got" = "1" ] && ok "unit: malformed line skipped, valid counted" || bad "unit: malformed line skipped, valid counted" "got '$got'"
+
+# --- layer 1b: _mp_conversation_chars unit ---------------------------------
+# Mirrors _lib.mjs extractConversation: non-isMeta user prompts (string, or
+# tool_result-free array text joined with \n) + FIRST text block per
+# assistant entry. Expected total below is hand-computed:
+#   10 (user string) + 5 (assistant FIRST block only, not 15)
+#   + 5 (assistant text after tool_use block) + 0 (isMeta) + 0 (tool_result)
+#   + 5 ("dd"+\n+"ee") = 25, malformed line skipped.
+if ! type _mp_conversation_chars >/dev/null 2>&1; then
+  bad "_lib.sh exports _mp_conversation_chars" "helper not defined"
+else
+  ok "_lib.sh exports _mp_conversation_chars"
+fi
+
+SUBST="$SBX/subst.jsonl"
+cat > "$SUBST" <<'JL'
+{"type":"user","message":{"role":"user","content":"0123456789"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"aaaaa"},{"type":"text","text":"bbbbbbbbbb"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"X","input":{}},{"type":"text","text":"ccccc"}]}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"ZZZZZZZZZZZZZZZZZZZZ"}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ZZZZZZZZ"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"dd"},{"type":"text","text":"ee"}]}}
+{"broken json
+JL
+got=$(_mp_conversation_chars "$SUBST" 2>/dev/null)
+[ "$got" = "25" ] \
+  && ok "unit: conversation chars = 25 (first-asst-block-only, isMeta/tool_result excluded, \\n join)" \
+  || bad "unit: conversation chars = 25" "got '$got'"
+
+got=$(_mp_conversation_chars "$SBX/does-not-exist.jsonl" 2>/dev/null)
+[ "$got" = "0" ] && ok "unit: conversation chars missing transcript → 0" || bad "unit: conversation chars missing transcript → 0" "got '$got'"
+
+got=$(_mp_conversation_chars "$SBX/empty.jsonl" 2>/dev/null)
+[ "$got" = "0" ] && ok "unit: conversation chars empty transcript → 0" || bad "unit: conversation chars empty transcript → 0" "got '$got'"
 
 # --- layer 2: session-end.sh behavioral -----------------------------------
 ENGINE="$SBX/engine/hooks"
@@ -147,6 +192,114 @@ done
 [ "$launched" -eq 1 ] \
   && ok "session-end: 6-real-turn session DOES launch replay (over-correction guard)" \
   || bad "session-end: 6-real-turn session DOES launch replay" "node stub never invoked"
+
+# --- layer 2b: substance rescue (few turns, long session) -------------------
+# wait_for_launch <sid> → 0 if the node stub fired for that session id
+wait_for_launch() {
+  _i=0
+  while [ "$_i" -lt 8 ]; do
+    [ -f "$SBX/node-invoked-$1" ] && return 0
+    sleep 0.5
+    _i=$((_i + 1))
+  done
+  return 1
+}
+
+# A) conversation-heavy: 2 real turns + 30 assistant texts ×1000 chars
+#    → ~30k conversation chars ≥ MIN_CHARS default (25000) while raw stays
+#    ~33KB < MIN_BYTES default (200000): the CHARS axis alone must rescue.
+BIGTXT=$(printf '%01000d' 0)
+CONV="$SBX/monster-conv.jsonl"
+: > "$CONV"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$CONV"
+i=1
+while [ "$i" -le 30 ]; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$BIGTXT" >> "$CONV"
+  i=$((i + 1))
+done
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$CONV"
+
+rm -f "$BC"
+printf '{"session_id":"sid-monster-conv","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$CONV" "$PROJ" "$PROJ" \
+  | PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+wait_for_launch "sid-monster-conv" \
+  && ok "session-end: 2-turn session with ~30k conversation chars DOES replay (chars axis)" \
+  || bad "session-end: 2-turn session with ~30k conversation chars DOES replay (chars axis)" "node stub never invoked"
+
+# B) tool-heavy: 2 real turns + 120 tool_results ×2000 chars → raw ~250KB
+#    ≥ MIN_BYTES while conversation is 4 chars < MIN_CHARS: the BYTES axis
+#    alone must rescue (the measured real case: 2 turns, 1.1MB raw, ~10k
+#    conversation chars — a chars-only gate skips it).
+BIGRES=$(printf '%02000d' 0)
+TOOLY="$SBX/monster-tools.jsonl"
+: > "$TOOLY"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$TOOLY"
+i=1
+while [ "$i" -le 120 ]; do
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$TOOLY"
+  i=$((i + 1))
+done
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$TOOLY"
+
+sleep 0.5; rm -f "$BC"
+printf '{"session_id":"sid-monster-tools","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$TOOLY" "$PROJ" "$PROJ" \
+  | PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+wait_for_launch "sid-monster-tools" \
+  && ok "session-end: 2-turn session with ~250KB raw transcript DOES replay (bytes axis)" \
+  || bad "session-end: 2-turn session with ~250KB raw transcript DOES replay (bytes axis)" "node stub never invoked"
+
+# C) 0-turn guard: huge raw but ZERO real prompts (headless/programmatic
+#    run) must still skip + carry forward — no human thread to carry.
+ZERO="$SBX/zeroturn.jsonl"
+: > "$ZERO"
+i=1
+while [ "$i" -le 120 ]; do
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$ZERO"
+  i=$((i + 1))
+done
+
+sleep 0.5; rm -f "$BC"
+printf '{"session_id":"sid-zeroturn","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$ZERO" "$PROJ" "$PROJ" \
+  | PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+sleep 1.5
+if [ -f "$SBX/node-invoked-sid-zeroturn" ]; then
+  bad "session-end: 0-turn huge session does NOT replay (headless guard)" "replay was launched"
+elif [ -f "$BC" ] && grep -q '^\[Carry-forward: session had 0 user turn' "$BC"; then
+  ok "session-end: 0-turn huge session does NOT replay (headless guard)"
+else
+  bad "session-end: 0-turn huge session does NOT replay (headless guard)" \
+      "boot-ctx: $(head -1 "$BC" 2>/dev/null)"
+fi
+
+# D) knobs (raise): both thresholds maxed → even the conversation monster
+#    skips + carries forward. Pins MP_REPLAY_MIN_CHARS/MP_REPLAY_MIN_BYTES
+#    plumbing — a hardcoded gate passes A/B but fails here.
+rm -f "$BC"
+printf '{"session_id":"sid-knob-high","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$CONV" "$PROJ" "$PROJ" \
+  | MP_REPLAY_MIN_CHARS=999999999 MP_REPLAY_MIN_BYTES=999999999 PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+sleep 1.5
+if [ -f "$SBX/node-invoked-sid-knob-high" ]; then
+  bad "session-end: raised knobs re-skip the conversation monster" "replay was launched"
+elif [ -f "$BC" ] && grep -q '^\[Carry-forward: session had 2 user turn' "$BC"; then
+  ok "session-end: raised knobs re-skip the conversation monster"
+else
+  bad "session-end: raised knobs re-skip the conversation monster" \
+      "boot-ctx: $(head -1 "$BC" 2>/dev/null)"
+fi
+
+# E) knobs (lower): tiny trivial transcript + MP_REPLAY_MIN_BYTES=1000 →
+#    its ~2KB raw now clears the bar and must replay.
+rm -f "$BC"
+printf '{"session_id":"sid-knob-low","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$TRIV" "$PROJ" "$PROJ" \
+  | MP_REPLAY_MIN_BYTES=1000 PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+wait_for_launch "sid-knob-low" \
+  && ok "session-end: lowered MP_REPLAY_MIN_BYTES rescues the trivial session" \
+  || bad "session-end: lowered MP_REPLAY_MIN_BYTES rescues the trivial session" "node stub never invoked"
 
 # --- layer 3: auto-save-stop.sh behavioral --------------------------------
 export HOME="$SBX/fake-home"

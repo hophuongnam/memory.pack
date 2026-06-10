@@ -67,8 +67,9 @@ export function fmSerialize(lines, rest) {
 //   * string content is a prompt; array content is a prompt only when it
 //     carries no tool_result block (tool_results come back as user-type
 //     entries) — its text blocks are joined. Mirrors log-token-rate.sh's
-//     mutation-pinned is_user_prompt and _lib.sh _mp_real_user_turns;
-//     keep the three in sync.
+//     mutation-pinned is_user_prompt and _lib.sh _mp_real_user_turns /
+//     _mp_conversation_chars (the trivial-skip substance gate);
+//     keep the four in sync.
 // An assistant entry contributes its FIRST text block (thinking/tool_use
 // blocks are not conversation).
 export function extractConversation(msgs) {

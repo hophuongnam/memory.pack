@@ -105,7 +105,8 @@ _mp_resolve_project_key() {
 # Used by session-end.sh (trivial-session replay skip) and
 # auto-save-stop.sh (SAVE_INTERVAL checkpoint counting). The per-line
 # `fromjson? // empty` pass drops the malformed tail line CC can leave
-# mid-write instead of crashing the count.
+# mid-write instead of crashing the count. _mp_conversation_chars below
+# shares the same user-entry semantics — keep them aligned.
 _mp_real_user_turns() {
   _mp_t="$1"
   if [ -z "$_mp_t" ] || [ ! -f "$_mp_t" ]; then
@@ -123,6 +124,48 @@ _mp_real_user_turns() {
           else false end
         )
       ) ] | length' 2>/dev/null)
+  case "$_mp_n" in
+    ''|*[!0-9]*) printf '0' ;;
+    *) printf '%s' "$_mp_n" ;;
+  esac
+}
+
+# _mp_conversation_chars: total chars of user/assistant conversation text a
+# replay agent would actually see, printed as a bare integer (0 on
+# missing/empty/unreadable transcript).
+#
+# Mirrors _lib.mjs extractConversation (which builds the replay prompt): a
+# user entry counts only when NOT isMeta and its content is a string or a
+# tool_result-free array (text blocks joined with \n); an assistant entry
+# counts its FIRST text block only. Slight undercount vs the .mjs output
+# (no "USER: "/"ASSISTANT: " prefixes, no inter-entry newlines) — fine for
+# thresholding, never use for equality. Keep in sync with
+# extractConversation (_lib.mjs), _mp_real_user_turns above, and
+# log-token-rate.sh's is_user_prompt.
+#
+# Used by session-end.sh's trivial-skip gate: a ≤5-turn session whose
+# conversation is big is a single-prompt autonomous/discussion session,
+# not a trivial one — turn count alone under-measures it.
+_mp_conversation_chars() {
+  _mp_t="$1"
+  if [ -z "$_mp_t" ] || [ ! -f "$_mp_t" ]; then
+    printf '0'
+    return 0
+  fi
+  _mp_n=$(jq -cR 'fromjson? // empty' "$_mp_t" 2>/dev/null | jq -sr '
+    [ .[]
+      | if .type == "user" and ((.isMeta // false) | not) then
+          (.message.content | type) as $ct |
+          if   $ct == "string" then (.message.content | length)
+          elif $ct == "array"  then
+            (if ([.message.content[].type] | index("tool_result")) == null
+             then ([.message.content[] | select(.type == "text" and ((.text // "") != "")) | .text] | join("\n") | length)
+             else 0 end)
+          else 0 end
+        elif .type == "assistant" then
+          ([.message.content[]? | select(.type == "text" and ((.text // "") != "")) | .text] | first // "" | length)
+        else 0 end
+    ] | add // 0' 2>/dev/null)
   case "$_mp_n" in
     ''|*[!0-9]*) printf '0' ;;
     *) printf '%s' "$_mp_n" ;;

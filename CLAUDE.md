@@ -52,7 +52,13 @@ paths (silent amnesia for `Nam's Proj`-style dirs).
 `SAVE_INTERVAL=50` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
 tool_results, isMeta bookkeeping, and slash-command entries excluded — raw
 `"type":"user"` counting fired after ~50 transcript ENTRIES ≈ a handful of
-real turns; same counter gates session-end's ≤5-turn trivial-replay skip)
+real turns; same counter feeds session-end's trivial-replay skip, which
+skips only when turns ≤5 AND the session is small on BOTH substance axes:
+`_mp_conversation_chars` < `MP_REPLAY_MIN_CHARS` (25k) AND raw transcript
+< `MP_REPLAY_MIN_BYTES` (200KB) — a 2-prompt session can be a 2MB
+autonomous monster worth replaying, and tool-heavy monsters hold few
+conversation chars so BOTH axes are load-bearing; 0-turn headless
+sessions always skip)
 → Claude writes bodies. (b) `boot-inject.sh`
 writes `sessions.log.md`/`SESSIONS.md`. (c) `replay.mjs` pass 2 writes
 `PENDING_MEMORIES.md`. (d) `memory-recall.sh`→`update-recall.mjs` edits
@@ -196,11 +202,15 @@ carries its camel twin on the same line, plus behavioral camel-only
 stdin through auto-save-stop — trigger fires — and memory-recall —
 recall_count bumps AND per-session dedup holds; the dedup loss was the
 nasty one: empty session_id inflated counts → wrong auto-promotions),
-`test_real_user_turns` (`_mp_real_user_turns` unit + session-end
-trivial-skip/carry-forward behavioral with node stubbed via PATH + the
-auto-save tool-heavy no-trigger case; pins that turn counters count REAL
-prompts, not tool_result/isMeta entries — a real 594-line transcript held
-153 user-type entries but 2 prompts),
+`test_real_user_turns` (`_mp_real_user_turns` + `_mp_conversation_chars`
+units + session-end trivial-skip/carry-forward behavioral with node
+stubbed via PATH + the auto-save tool-heavy no-trigger case; pins that
+turn counters count REAL prompts, not tool_result/isMeta entries — a real
+594-line transcript held 153 user-type entries but 2 prompts — AND the
+substance rescue: few-turn sessions big on either axis (conversation
+chars / raw bytes) must replay, 0-turn headless must not, `MP_REPLAY_MIN_*`
+knobs mutation-pinned in both directions; the chars helper mirrors
+`extractConversation` incl. first-assistant-block-only),
 `test_replay_extraction` (`extractConversation`: isMeta string/array
 exclusion, tool_result exclusion, array-text prompt inclusion;
 `truncateConversation`: head/tail preservation + elision marker + default
