@@ -154,5 +154,39 @@ grep -q 'boom: stub replay exploded' "$BC2" 2>/dev/null \
   && ok "success run leaves no error log for its own project" \
   || bad "success run leaves no error log for its own project" "unexpected $(cat "$ENGINE/.replay-error-${HASH}.log" 2>/dev/null)"
 
+# --- case 4: skip-replay sentinel — consumed, no replay, carry-forward ------
+# The user opt-out path (boot-inject's "Skip-replay protocol"): a one-shot
+# .skip-replay-<hash> must (a) suppress the replay launch even for a
+# replay-worthy session, (b) be consumed (rm) so the NEXT session replays
+# normally, (c) resurrect the prior boot context with the carry-forward
+# header so the skip never breaks the memory chain
+# (feedback_skip_replay_must_carry_forward).
+PROJ3="$SBX/Skip.Proj"
+mkdir -p "$PROJ3"
+HASH3=$(printf '%s' "$PROJ3" | _mp_hash)
+BC3="$ENGINE/.boot-context-${HASH3}"
+SENT3="$ENGINE/.skip-replay-${HASH3}"
+: > "$SENT3"
+printf 'TITLE: pre-skip session\nSUMMARY: carried over the skip\n' > "$ENGINE/.boot-context-last-${HASH3}"
+
+printf '{"session_id":"sid-skip","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ3" "$PROJ3" \
+  | PATH="$STUB_OK:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+sleep 1
+
+[ ! -f "$SENT3" ] \
+  && ok "skip sentinel: consumed (one-shot)" \
+  || bad "skip sentinel: consumed (one-shot)" "sentinel still present"
+grep -q '^sid-skip$' "$SBX/ok-invocations" 2>/dev/null \
+  && bad "skip sentinel: replay NOT launched" "node stub was invoked" \
+  || ok "skip sentinel: replay NOT launched"
+if [ -f "$BC3" ] && grep -q '^\[Carry-forward: replay skipped by user request' "$BC3" \
+   && grep -q 'TITLE: pre-skip session' "$BC3"; then
+  ok "skip sentinel: prior boot context carried forward with skip header"
+else
+  bad "skip sentinel: prior boot context carried forward with skip header" \
+      "bc=$(cat "$BC3" 2>/dev/null | head -2 | tr '\n' ' | ')"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

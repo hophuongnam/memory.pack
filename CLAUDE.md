@@ -129,7 +129,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-20 suites in `tests/` — run all before any commit (CI mirrors the same
+21 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`):
 
 ```
@@ -208,7 +208,15 @@ caps; structural pin that replay.mjs consumes both),
 `test_session_end_launcher` (quote-safe env-passing launcher: apostrophe
 project path still replays; failure path writes per-project
 `.replay-error-<hash>.log` + synthetic banner + exit marker; no fixed
-/tmp log; unique tmp.$$),
+/tmp log; unique tmp.$$; skip-replay sentinel consumed one-shot with NO
+launch and carry-forward of the prior boot context),
+`test_memory_search_inject` (the FTS5 pipeline end-to-end: real indexer
+over a sandboxed store — build / nested-shape type resolution / archived
+status / incremental edit+delete sync — then the real inject hook via
+MEMORY_SEARCH_DB: relevant prompt injects with the epistemic preamble,
+nonsense/slash/short prompts and an impossible threshold inject NOTHING.
+Fixture corpus is padded to 15 docs because BM25 IDF collapses to ~0 in a
+tiny corpus and the production -8.0 threshold can never be cleared),
 `test_runtime_state_gc` (auto-save prunes 7d-old `*_last_save` + rotates
 hook.log >512KB→500 lines; log-token-rate rotates >4000→2000 lines with
 newest samples surviving; boot-inject SessionStart sweeps legacy
