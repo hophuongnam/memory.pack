@@ -1,0 +1,40 @@
+# Run the full Memory.Pack suite on every push/PR, on BOTH OS families.
+# The matrix is the point: the engine's recurring breakage class is
+# BSD-vs-GNU drift (md5 vs md5sum, sed quantifiers, stat -f vs -c) that a
+# single-OS dev loop can't catch — macos-latest pins the BSD side,
+# ubuntu-latest the GNU side. Steps mirror the CLAUDE.md pre-commit loop
+# exactly; if you change one, change both.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Runner images ship bash/git/python3/node; jq + sqlite3 are present
+      # on both images today but cheap to assert — install.sh --check is
+      # the same preflight a real host runs, so a missing dep fails HERE
+      # with the engine's own message, not deep inside a suite.
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq sqlite3
+
+      - name: Preflight (install.sh --check)
+        run: ./install.sh --check
+
+      - name: Run all suites
+        run: |
+          fail=0
+          for t in tests/test_*.sh;  do echo "== $t"; bash "$t" || { echo "FAIL $t"; fail=1; }; done
+          for t in tests/test_*.mjs; do echo "== $t"; node "$t" || { echo "FAIL $t"; fail=1; }; done
+          exit $fail

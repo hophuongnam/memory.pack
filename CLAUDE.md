@@ -37,12 +37,23 @@ memory-index-update, Edit/MultiEdit→memory-index-update.
 pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
 to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
 promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —
-runs detached without read access to memory bodies). Exit codes: 0 ok,
-2 benign no-op, 3 real failure (session-end synthesizes a self-reporting
-"Replay failed" boot-context).
+runs detached without read access to memory bodies). Transcript text comes
+from `_lib.mjs extractConversation` (skips isMeta + tool_result user
+entries, accepts string AND array-text prompts) bounded by
+`truncateConversation` (head+tail ≈200k chars — a long session must not
+blow the prompt and lose its summary). Exit codes: 0 ok, 2 benign no-op,
+3 real failure (session-end synthesizes a self-reporting "Replay failed"
+boot-context embedding the per-project `.replay-error-<hash>.log` tail).
+The detached launcher passes every dynamic value via `env` into a STATIC
+single-quoted body — interpolation was a parse error for quoted project
+paths (silent amnesia for `Nam's Proj`-style dirs).
 
 **Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
-`SAVE_INTERVAL=50` user turns → Claude writes bodies. (b) `boot-inject.sh`
+`SAVE_INTERVAL=50` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
+tool_results, isMeta bookkeeping, and slash-command entries excluded — raw
+`"type":"user"` counting fired after ~50 transcript ENTRIES ≈ a handful of
+real turns; same counter gates session-end's ≤5-turn trivial-replay skip)
+→ Claude writes bodies. (b) `boot-inject.sh`
 writes `sessions.log.md`/`SESSIONS.md`. (c) `replay.mjs` pass 2 writes
 `PENDING_MEMORIES.md`. (d) `memory-recall.sh`→`update-recall.mjs` edits
 *frontmatter only* (recall_count/last_recalled), session-deduped, and
@@ -118,7 +129,8 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-14 suites in `tests/` — run all before any commit:
+20 suites in `tests/` — run all before any commit (CI mirrors the same
+loops on ubuntu + macos: `.github/workflows/test.yml`):
 
 ```
 for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
@@ -164,7 +176,7 @@ per real-CC transcripts, mutation-pinned), idempotent re-fire, monotonic
 cum>last_cum filter, per-session isolation; cumulative tokens are sum of
 all 4 fields so a dropped subfield kills 4 assertions),
 `test_statusline_render` (the renderer cluster: theme + icons + render
-helpers + statusline-command.sh integration. 124 assertions covering
+helpers + statusline-command.sh integration. ~129 assertions covering
 source-time silence on every sourced helper, ICON_* existence in both
 Nerd/Unicode tables, `mp_pill_fg` luminance flip with mid-boundary
 coverage, `mp_gradient_color` interpolation across all 4 segments,
@@ -174,8 +186,39 @@ indicator preservation across all width modes, COLUMNS=0/empty/unset
 coerce-to-default — pins the silent-amnesia analog where CC spawns the
 statusline subprocess with `COLUMNS=0` and `${COLUMNS:-80}` keeps it at
 `0` because `:-` only substitutes for unset/empty, so line 3 silently
-dropped on every CC invocation). Two accepted
-patterns for the side-effecting
+dropped on every CC invocation; plus the cache-age-clock REMOVAL contract
+— no clock token, no `.statusline-clock-*` anchor side effect, no
+`mp_clock_format` — and a ≤3-jq-forks pin on the single-pass stdin
+extraction),
+`test_bilingual_stdin` (invariant #3 across EVERY stdin-parsing hook:
+structural scan that any JSON-accessor read of a snake_case CC field
+carries its camel twin on the same line, plus behavioral camel-only
+stdin through auto-save-stop — trigger fires — and memory-recall —
+recall_count bumps AND per-session dedup holds; the dedup loss was the
+nasty one: empty session_id inflated counts → wrong auto-promotions),
+`test_real_user_turns` (`_mp_real_user_turns` unit + session-end
+trivial-skip/carry-forward behavioral with node stubbed via PATH + the
+auto-save tool-heavy no-trigger case; pins that turn counters count REAL
+prompts, not tool_result/isMeta entries — a real 594-line transcript held
+153 user-type entries but 2 prompts),
+`test_replay_extraction` (`extractConversation`: isMeta string/array
+exclusion, tool_result exclusion, array-text prompt inclusion;
+`truncateConversation`: head/tail preservation + elision marker + default
+caps; structural pin that replay.mjs consumes both),
+`test_session_end_launcher` (quote-safe env-passing launcher: apostrophe
+project path still replays; failure path writes per-project
+`.replay-error-<hash>.log` + synthetic banner + exit marker; no fixed
+/tmp log; unique tmp.$$),
+`test_runtime_state_gc` (auto-save prunes 7d-old `*_last_save` + rotates
+hook.log >512KB→500 lines; log-token-rate rotates >4000→2000 lines with
+newest samples surviving; boot-inject SessionStart sweeps legacy
+`.statusline-clock-*`; every sweep has a keep-fresh mutation guard),
+`test_archive_resurrect_preserve` (resurrect must not reshape: nested
+`metadata:` children/`node_type` survive byte-for-byte while
+created/recall_count inherit and last_reviewed stamps; malformed files
+untouched; pins the shared `fmParse`/`fmSetInPlace`/`fmSerialize` in
+`_lib.mjs` consumed by BOTH update-recall.mjs and archive-resurrect.mjs).
+Two accepted patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only
 (exclude comment lines AND runtime-state dotfiles), assert the portable

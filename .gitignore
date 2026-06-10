@@ -3,6 +3,9 @@ hooks/.boot-context-*.tmp
 hooks/.boot-marker-*
 hooks/.replay-pid-*
 hooks/.replay-error-*
+hooks/.skip-replay-*
+# .statusline-clock-* is legacy (cache-age clock removed 2026-06-10);
+# kept ignored/excluded so hosts that ran the clock build stay clean.
 hooks/.statusline-clock-*
 index/search.db
 index/search.db-*
