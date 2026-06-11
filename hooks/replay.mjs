@@ -282,21 +282,30 @@ Each proposal is a durable fact the replay agent judged worth saving but
 could not commit directly (replay runs detached with no read access to
 existing memory bodies — only the index).
 
+Treat proposals as unverified claims, not observations: a detached replay
+agent can confabulate specifics — invented names, test results, or bugs —
+typically by narrating a carried-forward TODO's expected outcome as
+observed fact.
+
 ## Review protocol
 
 When you see this file in a session:
 1. Read each PROPOSAL below.
 2. Compare it against the memory files already in this directory (read
    the actual files, not just the index).
-3. For each proposal, choose ONE:
+3. Verify every specific a proposal adds beyond already-known state
+   (names, test results, bugs, counts) against ground truth: the session
+   transcripts (\`~/.claude/projects/<slug>/*.jsonl\`) and live systems.
+   A specific found in neither is confabulation — Discard it.
+4. For each surviving proposal, choose ONE:
    - **Create** a new memory file using the proposed type/name/body.
      Verify against the canonical schema at
      \`${SCHEMA_PATH}\` and add a pointer line to
      \`MEMORY.md\` in the right section.
    - **Merge** into an existing memory on the same topic.
    - **Discard** (noise, ephemeral, already known, or no longer true).
-4. Delete the proposal block from this file after acting on it.
-5. Delete this file entirely once no proposals remain.
+5. Delete the proposal block from this file after acting on it.
+6. Delete this file entirely once no proposals remain.
 
 Not a memory file — \`memory-lint\` ignores this path.
 

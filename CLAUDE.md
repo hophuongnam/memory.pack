@@ -135,7 +135,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-21 suites in `tests/` — run all before any commit (CI mirrors the same
+22 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`):
 
 ```
@@ -154,6 +154,13 @@ silent-amnesia class), `test_inject_preamble_epistemic` (the
 memory-hint inject preamble must carry the verify-before-asserting
 epistemic clause, not just the relevance gate — structural-source pin
 for the *read-side* analog of the silent-amnesia class),
+`test_pending_header_epistemic` (the PENDING_MEMORIES.md header template
+in `replay.mjs` must label proposals unverified-claims, name
+confabulation, and carry a ground-truth verification step — transcripts +
+live systems — that PRECEDES the Create/Merge choice; review-side sibling
+of the inject-preamble pin, born of the 2026-06-11 incident where a
+detached replay narrated a carried-forward TODO as observed fact — see
+`feedback_verify_replay_memory_proposals` in the Rikkei-HelpDesk store),
 `test_statusline_marker_path` (statusline must read
 `.boot-marker-<id>`/`.skip-replay-<hash>` from the same dir the writers
 write them — self-located via the symlink, BSD-safe bare `readlink`, no
