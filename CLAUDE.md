@@ -49,7 +49,7 @@ single-quoted body — interpolation was a parse error for quoted project
 paths (silent amnesia for `Nam's Proj`-style dirs).
 
 **Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
-`SAVE_INTERVAL=50` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
+`SAVE_INTERVAL=10` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
 tool_results, isMeta bookkeeping, and slash-command entries excluded — raw
 `"type":"user"` counting fired after ~50 transcript ENTRIES ≈ a handful of
 real turns; same counter feeds session-end's trivial-replay skip, which

@@ -343,6 +343,39 @@ case "$OUT" in
   *) bad "auto-save-stop: 51 real turns still triggers (control)" "out=$OUT" ;;
 esac
 
+# Boundary: the block must fire at EXACTLY SAVE_INTERVAL real turns, not a
+# turn early or late. These two assertions pin SAVE_INTERVAL=10 — they hold
+# only for interval 10: at the old 50, ten real turns would not have blocked
+# (the 3/51 cases above straddle any interval in 3..51 and never pinned it).
+# A fresh session has no _last_save, so SINCE_LAST == the real-turn count.
+EXACT="$SBX/boundary-exact.jsonl"
+: > "$EXACT"
+i=1
+while [ "$i" -le 10 ]; do
+  printf '{"type":"user","message":{"role":"user","content":"q%s"}}\n' "$i" >> "$EXACT"
+  i=$((i + 1))
+done
+OUT=$(printf '{"session_id":"sid-bound-hit","stop_hook_active":false,"transcript_path":"%s"}' "$EXACT" \
+  | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) ok "auto-save-stop: exactly 10 real turns triggers the block (SAVE_INTERVAL=10)" ;;
+  *) bad "auto-save-stop: 10 real turns triggers the block (SAVE_INTERVAL=10)" "no block: $OUT" ;;
+esac
+
+UNDER="$SBX/boundary-under.jsonl"
+: > "$UNDER"
+i=1
+while [ "$i" -le 9 ]; do
+  printf '{"type":"user","message":{"role":"user","content":"q%s"}}\n' "$i" >> "$UNDER"
+  i=$((i + 1))
+done
+OUT=$(printf '{"session_id":"sid-bound-miss","stop_hook_active":false,"transcript_path":"%s"}' "$UNDER" \
+  | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) bad "auto-save-stop: 9 real turns must NOT trigger (one under SAVE_INTERVAL)" "blocked early: $OUT" ;;
+  *) ok "auto-save-stop: 9 real turns does NOT trigger (one under SAVE_INTERVAL=10)" ;;
+esac
+
 # --- layer 3b: turn-countdown state cache (statusline line-1 indicator) -----
 # auto-save-stop.sh already computes EXCHANGE_COUNT every Stop; it must ALSO
 # cache "<since_last> <interval>" to ${sid}_turns so the statusline can render
@@ -352,9 +385,9 @@ esac
 TF_HEAVY="$HOME/.claude/hook_state/sid-heavy_turns"
 if [ -f "$TF_HEAVY" ]; then
   read th_since th_int < "$TF_HEAVY"
-  [ "$th_since" = "3" ] && [ "$th_int" = "50" ] \
-    && ok "auto-save-stop: caches '3 50' to \${sid}_turns (3 real turns, no prior save)" \
-    || bad "auto-save-stop: caches '3 50' to \${sid}_turns" "got '$th_since $th_int'"
+  [ "$th_since" = "3" ] && [ "$th_int" = "10" ] \
+    && ok "auto-save-stop: caches '3 10' to \${sid}_turns (3 real turns, no prior save)" \
+    || bad "auto-save-stop: caches '3 10' to \${sid}_turns" "got '$th_since $th_int'"
 else
   bad "auto-save-stop: writes \${sid}_turns state file" "absent: $TF_HEAVY"
 fi
@@ -364,9 +397,9 @@ fi
 TF_MANY="$HOME/.claude/hook_state/sid-many_turns"
 if [ -f "$TF_MANY" ]; then
   read tm_since tm_int < "$TF_MANY"
-  [ "$tm_since" = "51" ] && [ "$tm_int" = "50" ] \
-    && ok "auto-save-stop: trigger Stop caches '51 50' (the since-save that fired the block)" \
-    || bad "auto-save-stop: trigger Stop caches '51 50'" "got '$tm_since $tm_int'"
+  [ "$tm_since" = "51" ] && [ "$tm_int" = "10" ] \
+    && ok "auto-save-stop: trigger Stop caches '51 10' (the since-save that fired the block)" \
+    || bad "auto-save-stop: trigger Stop caches '51 10'" "got '$tm_since $tm_int'"
 else
   bad "auto-save-stop: trigger Stop writes \${sid}_turns" "absent: $TF_MANY"
 fi

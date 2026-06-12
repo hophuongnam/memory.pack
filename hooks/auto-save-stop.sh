@@ -9,7 +9,7 @@
 #
 # === CONFIGURATION ===
 
-SAVE_INTERVAL=50
+SAVE_INTERVAL=10
 STATE_DIR="$HOME/.claude/hook_state"
 mkdir -p "$STATE_DIR"
 
@@ -94,7 +94,7 @@ if [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] && [ "$EXCHANGE_COUNT" -gt 0 ]; then
     cat << HOOKJSON
 {
   "decision": "block",
-  "reason": "AUTO-SAVE checkpoint reached (50 exchanges). Review this session and save anything worth preserving to the per-project memory store (~/.claude/projects/*/memory/). Focus on: key decisions, non-obvious learnings, user preferences, project state. Follow the canonical auto-memory schema at $SCHEMA_REF — it defines types, frontmatter, MEMORY.md section grouping, ≤150-char index entries, and the 150-line soft cap **on MEMORY.md** (the harness hard-truncates MEMORY.md at 200 lines or 25KB; this cap applies ONLY to the MEMORY.md index file, NOT to individual per-memory files, which have no length limit). Update existing memories on the same topic instead of creating duplicates. Then continue or end as appropriate."
+  "reason": "AUTO-SAVE checkpoint reached (10 exchanges). Review this session and save anything worth preserving to the per-project memory store (~/.claude/projects/*/memory/). Focus on: key decisions, non-obvious learnings, user preferences, project state. Follow the canonical auto-memory schema at $SCHEMA_REF — it defines types, frontmatter, MEMORY.md section grouping, ≤150-char index entries, and the 150-line soft cap **on MEMORY.md** (the harness hard-truncates MEMORY.md at 200 lines or 25KB; this cap applies ONLY to the MEMORY.md index file, NOT to individual per-memory files, which have no length limit). Update existing memories on the same topic instead of creating duplicates. Then continue or end as appropriate."
 }
 HOOKJSON
 else

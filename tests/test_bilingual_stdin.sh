@@ -88,7 +88,7 @@ SBX=$(mktemp -d); trap 'rm -rf "$SBX"' EXIT
 export HOME="$SBX"
 mkdir -p "$HOME/.claude"
 
-# 51 real string user turns → crosses SAVE_INTERVAL=50 on first Stop.
+# 51 real string user turns → crosses SAVE_INTERVAL=10 on first Stop.
 T="$SBX/transcript.jsonl"
 : > "$T"
 i=1
