@@ -48,6 +48,27 @@ printf '{"session_id":"sid-gc","stop_hook_active":false,"transcript_path":"/none
   && ok "auto-save GC: fresh *_last_save kept (mutation guard)" \
   || bad "auto-save GC: fresh *_last_save kept" "sweep deleted fresh state"
 
+# --- 1a'. auto-save-stop: stale *_turns pruned, fresh kept -----------------
+# The statusline's turn-countdown state file (${sid}_turns) shares the 7-day
+# per-session prune with *_last_save — same lifecycle. A find glob that
+# matched only *_last_save would leak one *_turns file per session forever
+# (the original unbounded-growth symptom this GC exists to prevent).
+OLD_T="$STATE_DIR/oldsess_turns"
+FRESH_T="$STATE_DIR/freshsess_turns"
+echo "12 50" > "$OLD_T"
+echo "3 50" > "$FRESH_T"
+python3 -c "import os, time; t = time.time() - 8*86400; os.utime('$OLD_T', (t, t))"
+
+printf '{"session_id":"sid-gc-turns","stop_hook_active":false,"transcript_path":"/nonexistent.jsonl"}' \
+  | bash "$HOOKS/auto-save-stop.sh" >/dev/null 2>&1
+
+[ ! -f "$OLD_T" ] \
+  && ok "auto-save GC: 8-day-old *_turns pruned" \
+  || bad "auto-save GC: 8-day-old *_turns pruned" "still present"
+[ -f "$FRESH_T" ] \
+  && ok "auto-save GC: fresh *_turns kept (mutation guard)" \
+  || bad "auto-save GC: fresh *_turns kept" "sweep deleted fresh state"
+
 # --- 1b. auto-save-stop: hook.log rotated past 512KB -----------------------
 LOG="$STATE_DIR/hook.log"
 : > "$LOG"

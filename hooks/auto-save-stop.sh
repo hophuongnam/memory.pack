@@ -17,8 +17,10 @@ mkdir -p "$STATE_DIR"
 # log observed 2026-06-10): prune per-session save markers older than 7
 # days and rotate hook.log past 512KB down to its newest 500 lines.
 # tail+mv rotation can lose a concurrent Stop's log line — debug log only,
-# never engine state, so last-writer-wins is acceptable.
-find "$STATE_DIR" -name '*_last_save' -type f -mtime +7 -delete 2>/dev/null
+# never engine state, so last-writer-wins is acceptable. Both per-session
+# state files (*_last_save + the statusline's *_turns countdown cache) share
+# this prune — same lifecycle, or *_turns would leak one file per session.
+find "$STATE_DIR" \( -name '*_last_save' -o -name '*_turns' \) -type f -mtime +7 -delete 2>/dev/null
 if [ -f "$STATE_DIR/hook.log" ]; then
     _log_bytes=$(wc -c < "$STATE_DIR/hook.log" 2>/dev/null | tr -d ' ')
     if [ -n "$_log_bytes" ] && [ "$_log_bytes" -gt 524288 ] 2>/dev/null; then
@@ -69,6 +71,19 @@ fi
 SINCE_LAST=$((EXCHANGE_COUNT - LAST_SAVE))
 
 echo "[$(date '+%H:%M:%S')] Session $SESSION_ID: $EXCHANGE_COUNT exchanges, $SINCE_LAST since last save" >> "$STATE_DIR/hook.log"
+
+# Cache the turn-countdown state for the statusline's line-1 indicator:
+# "<since_last> <interval>". Costs nothing extra — EXCHANGE_COUNT was already
+# computed above; the statusline reads this with a plain shell `read` instead
+# of re-parsing the transcript (which would blow its ≤3-jq-fork budget). The
+# displayed countdown is therefore the EXACT trigger math, by construction.
+# Skipped on 0-turn Stops (headless run, or a transient transcript-read race
+# yielding 0) so the indicator stays clean / keeps its last good value rather
+# than flickering to a full interval. Written BEFORE the trigger branch so it
+# reflects the SINCE_LAST that fired the block; the next turn's Stop resets it.
+if [ "$EXCHANGE_COUNT" -gt 0 ] 2>/dev/null; then
+    printf '%s %s\n' "$SINCE_LAST" "$SAVE_INTERVAL" > "$STATE_DIR/${SESSION_ID}_turns"
+fi
 
 # Time to save?
 if [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] && [ "$EXCHANGE_COUNT" -gt 0 ]; then

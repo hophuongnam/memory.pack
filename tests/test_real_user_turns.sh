@@ -343,5 +343,42 @@ case "$OUT" in
   *) bad "auto-save-stop: 51 real turns still triggers (control)" "out=$OUT" ;;
 esac
 
+# --- layer 3b: turn-countdown state cache (statusline line-1 indicator) -----
+# auto-save-stop.sh already computes EXCHANGE_COUNT every Stop; it must ALSO
+# cache "<since_last> <interval>" to ${sid}_turns so the statusline can render
+# the turns-until-autosave countdown WITHOUT re-parsing the transcript (a
+# second full-transcript jq pass per render would blow the statusline's
+# ≤3-jq-fork budget). The sid-heavy / sid-many runs above already wrote these.
+TF_HEAVY="$HOME/.claude/hook_state/sid-heavy_turns"
+if [ -f "$TF_HEAVY" ]; then
+  read th_since th_int < "$TF_HEAVY"
+  [ "$th_since" = "3" ] && [ "$th_int" = "50" ] \
+    && ok "auto-save-stop: caches '3 50' to \${sid}_turns (3 real turns, no prior save)" \
+    || bad "auto-save-stop: caches '3 50' to \${sid}_turns" "got '$th_since $th_int'"
+else
+  bad "auto-save-stop: writes \${sid}_turns state file" "absent: $TF_HEAVY"
+fi
+
+# Trigger Stop still caches the SINCE_LAST that fired the block (51) — the
+# statusline then shows 0 remaining (clamped) until the next turn resets it.
+TF_MANY="$HOME/.claude/hook_state/sid-many_turns"
+if [ -f "$TF_MANY" ]; then
+  read tm_since tm_int < "$TF_MANY"
+  [ "$tm_since" = "51" ] && [ "$tm_int" = "50" ] \
+    && ok "auto-save-stop: trigger Stop caches '51 50' (the since-save that fired the block)" \
+    || bad "auto-save-stop: trigger Stop caches '51 50'" "got '$tm_since $tm_int'"
+else
+  bad "auto-save-stop: trigger Stop writes \${sid}_turns" "absent: $TF_MANY"
+fi
+
+# 0-turn / unreadable-transcript Stop must NOT write a turns file: the
+# statusline then stays clean (or keeps the last good value) rather than
+# flickering to a full interval on a transient transcript-read race.
+printf '{"session_id":"sid-zero-turns","stop_hook_active":false,"transcript_path":"%s/none.jsonl"}' "$SBX" \
+  | bash "$HOOKS/auto-save-stop.sh" >/dev/null 2>&1
+[ ! -f "$HOME/.claude/hook_state/sid-zero-turns_turns" ] \
+  && ok "auto-save-stop: 0-turn Stop writes NO turns file (clean / last-good)" \
+  || bad "auto-save-stop: 0-turn Stop writes NO turns file" "file created on a 0-turn Stop"
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

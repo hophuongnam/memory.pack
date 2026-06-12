@@ -202,7 +202,13 @@ statusline subprocess with `COLUMNS=0` and `${COLUMNS:-80}` keeps it at
 dropped on every CC invocation; plus the cache-age-clock REMOVAL contract
 — no clock token, no `.statusline-clock-*` anchor side effect, no
 `mp_clock_format` — and a ≤3-jq-forks pin on the single-pass stdin
-extraction),
+extraction; plus the line-1 turns-until-autosave countdown —
+`<remaining>↓` read from `hook_state/<sid>_turns` via a plain shell `read`
+(NO jq, so the fork budget holds), OK/WARN/CRIT color ladder mutation-pinned
+at the 30%/10%-of-interval boundaries, since>interval clamped to `0↓`,
+absent file → hidden, and a corrupt/torn file (a float or bare identifier)
+must NOT blank the whole render — a FATAL arithmetic error under dash
+(Linux /bin/sh), verified guarded under real `/bin/dash`),
 `test_bilingual_stdin` (invariant #3 across EVERY stdin-parsing hook:
 structural scan that any JSON-accessor read of a snake_case CC field
 carries its camel twin on the same line, plus behavioral camel-only
@@ -217,7 +223,9 @@ turn counters count REAL prompts, not tool_result/isMeta entries — a real
 substance rescue: few-turn sessions big on either axis (conversation
 chars / raw bytes) must replay, 0-turn headless must not, `MP_REPLAY_MIN_*`
 knobs mutation-pinned in both directions; the chars helper mirrors
-`extractConversation` incl. first-assistant-block-only),
+`extractConversation` incl. first-assistant-block-only; plus auto-save-stop
+caching `<since_last> <interval>` to `${sid}_turns` every Stop for the
+statusline countdown — value-pinned, skipped on 0-turn Stops),
 `test_replay_extraction` (`extractConversation`: isMeta string/array
 exclusion, tool_result exclusion, array-text prompt inclusion;
 `truncateConversation`: head/tail preservation + elision marker + default
@@ -234,7 +242,7 @@ MEMORY_SEARCH_DB: relevant prompt injects with the epistemic preamble,
 nonsense/slash/short prompts and an impossible threshold inject NOTHING.
 Fixture corpus is padded to 15 docs because BM25 IDF collapses to ~0 in a
 tiny corpus and the production -8.0 threshold can never be cleared),
-`test_runtime_state_gc` (auto-save prunes 7d-old `*_last_save` + rotates
+`test_runtime_state_gc` (auto-save prunes 7d-old `*_last_save` + `*_turns` + rotates
 hook.log >512KB→500 lines; log-token-rate rotates >4000→2000 lines with
 newest samples surviving; boot-inject SessionStart sweeps legacy
 `.statusline-clock-*`; every sweep has a keep-fresh mutation guard),

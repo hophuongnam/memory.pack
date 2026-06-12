@@ -1,6 +1,6 @@
 #!/bin/sh
 # Claude Code status line — width-adaptive 3-line display.
-# Line 1: dir + model pill + git + memory/boot/skip overlay
+# Line 1: dir + model pill + git + memory/boot/skip/turns-to-autosave overlay
 # Line 2: ctx + 5h + 7d bars
 # Line 3: turn-rate sparkline (full + medium modes; narrow drops it)
 #
@@ -348,12 +348,46 @@ if [ -n "$proj_hash" ] && [ -f "$HOOKS_DIR/.skip-replay-${proj_hash}" ]; then
   skip_themed="$(ansi_fg "$THEME_FG_SKIP_REPLAY")${ICON_SKIP_REPLAY}skip-replay${RESET}"
 fi
 
+# Turns-until-autosave countdown. auto-save-stop.sh caches "<since> <interval>"
+# to $HOOK_STATE_DIR/<sid>_turns on every Stop (reusing the turn count it
+# already computes), so we read it with a plain shell `read` — NO jq — keeping
+# the ≤3-jq-fork budget that the one-pass stdin extraction was built for. The
+# auto-save BLOCKS the AI every <interval> real turns; showing the remaining
+# count lets that interruption be anticipated. remaining = interval − since,
+# clamped ≥0; color escalates as the block nears (CRIT ≤10% of interval, WARN
+# ≤30%). Absent file (turn 0 / headless, before the first Stop writes it) →
+# indicator hidden, like the line-3 sparkline. NEVER dropped by width mode —
+# a continuity signal, same policy as mem/boot/skip.
+turns_themed=""
+turns_file="$HOOK_STATE_DIR/${session_id}_turns"
+if [ -n "$session_id" ] && [ -f "$turns_file" ]; then
+  read t_since t_interval < "$turns_file"
+  # Both fields must be pure non-negative integers BEFORE any arithmetic. Our
+  # writer guarantees it, but a torn/tampered file must not break the render:
+  # under dash (Linux /bin/sh) a float like "1.5" is a FATAL arithmetic error
+  # that blanks EVERY line, and a bare identifier like "x" evaluates to 0 — a
+  # bogus countdown. The case checks make the skip shell-independent.
+  t_ok=1
+  case "$t_since"    in ''|*[!0-9]*) t_ok=0 ;; esac
+  case "$t_interval" in ''|*[!0-9]*) t_ok=0 ;; esac
+  if [ "$t_ok" = 1 ] && [ "$t_interval" -gt 0 ]; then
+    t_remaining=$(( t_interval - t_since ))
+    [ "$t_remaining" -lt 0 ] && t_remaining=0
+    if   [ "$t_remaining" -le $(( t_interval / 10 )) ];     then turns_fg="$THEME_FG_MEMORY_CRIT"
+    elif [ "$t_remaining" -le $(( t_interval * 3 / 10 )) ]; then turns_fg="$THEME_FG_MEMORY_WARN"
+    else                                                        turns_fg="$THEME_FG_MEMORY_OK"
+    fi
+    turns_themed="$(ansi_fg "$turns_fg")${ICON_TURNS} ${t_remaining}↓${RESET}"
+  fi
+fi
+
 cont_display=""
 sep=" \033[2m│${RESET} "
 overlay=""
 [ -n "$mem_part" ]           && overlay="${mem_part}"
 [ -n "$boot_status_themed" ] && overlay="${overlay:+${overlay} }${boot_status_themed}"
 [ -n "$skip_themed" ]        && overlay="${overlay:+${overlay} }${skip_themed}"
+[ -n "$turns_themed" ]       && overlay="${overlay:+${overlay} }${turns_themed}"
 [ -n "$overlay" ]            && cont_display="${sep}${overlay}"
 
 printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b\n" \

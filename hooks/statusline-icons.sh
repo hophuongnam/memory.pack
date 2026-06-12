@@ -23,6 +23,7 @@
 #   ICON_5H            U+F043D nf-md-timer-stop          U+23F1  stopwatch (⏱)
 #   ICON_7D            U+F0AA0 nf-md-calendar-clock      U+23F3  hourglass (⏳)
 #   ICON_VIBE          U+F0E7  nf-fa-bolt                U+26A1  high-voltage (⚡)
+#   ICON_TURNS         U+F0450 nf-md-autorenew           U+27F3  cycle arrow (⟳)
 
 if _mp_have_nerdfont 2>/dev/null; then
   ICON_BRANCH=""
@@ -37,6 +38,7 @@ if _mp_have_nerdfont 2>/dev/null; then
   ICON_5H="󰐽"
   ICON_7D="󰪠"
   ICON_VIBE=""
+  ICON_TURNS="󰑐"
 else
   ICON_BRANCH="⎇"
   ICON_DIRTY="*"
@@ -50,4 +52,5 @@ else
   ICON_5H="⏱"
   ICON_7D="⏳"
   ICON_VIBE="⚡"
+  ICON_TURNS="⟳"
 fi

@@ -85,7 +85,7 @@ if [ -f "$ICONS" ]; then
 
   # Every expected ICON_* var must be set under at least one mode.
   for icon in ICON_BRANCH ICON_DIRTY ICON_PWD ICON_MEMORY ICON_BOOT_OK ICON_BOOT_PENDING \
-              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE; do
+              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS; do
     val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
     [ -n "$val" ] && ok "$icon exports under Nerd Font" || bad "$icon exports under Nerd Font"
   done
@@ -95,7 +95,7 @@ if [ -f "$ICONS" ]; then
   # Unicode fallback table intentionally leaves it empty (no widely-rendered
   # folder glyph that beats omitting it).
   for icon in ICON_BRANCH ICON_DIRTY ICON_MEMORY ICON_BOOT_OK ICON_BOOT_PENDING \
-              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE; do
+              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS; do
     val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=0 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
     [ -n "$val" ] && ok "$icon exports under Unicode fallback" || bad "$icon exports under Unicode fallback"
   done
@@ -581,6 +581,85 @@ if [ -f "$SL" ]; then
   else
     ok "clock removed: no .statusline-clock reference in statusline-command.sh"
   fi
+fi
+
+# ─── statusline-command.sh integration: turns-until-autosave countdown ─────
+# auto-save-stop.sh caches "<since_last> <interval>" to hook_state/<sid>_turns
+# every Stop; the statusline reads it (plain shell `read`, NO jq) and shows
+# "<remaining>↓" on line 1 so the user can anticipate the SAVE_INTERVAL
+# auto-save block. remaining = interval - since, clamped ≥0; color escalates
+# as the save nears (OK > 30% of interval, WARN ≤30%, CRIT ≤10%). Absent file
+# (turn 0 / headless) → indicator hidden. Reuses TMPHOME/FIX set up above.
+if [ -f "$SL" ]; then
+  # Remove any boot marker for this fixture session: ✓booted's OK color
+  # (THEME_FG_BOOT_OK) is byte-identical to the turns OK color
+  # (THEME_FG_MEMORY_OK = 135;215;135), so leaving it would let a wrong-color
+  # turns indicator pass the OK assertion. With it gone, each color code below
+  # is unique to the turns indicator on line 1.
+  rm -f "$HERE/../hooks/.boot-marker-test-session-full"
+  TURNS_HS="$TMPHOME/.claude/hook_state"; mkdir -p "$TURNS_HS"
+  TURNS_FILE="$TURNS_HS/test-session-full_turns"   # session_id from the fixture
+  OK_RGB='38;2;135;215;135'; WARN_RGB='38;2;240;220;100'; CRIT_RGB='38;2;220;88;99'
+
+  turns_line1() {  # $1 = "<since> <interval>" → line 1 of the render
+    printf '%s\n' "$1" > "$TURNS_FILE"
+    COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" \
+      < "$FIX/statusline-stdin-full.json" 2>/dev/null | head -n 1
+  }
+
+  # since=12, interval=50 → remaining 38 (>15) → OK green.
+  l1=$(turns_line1 "12 50")
+  echo "$l1" | grep -q '38↓' \
+    && ok "turns: remaining 38 shown as '38↓' on line 1" \
+    || bad "turns: remaining 38 shown as '38↓'" "line1: $l1"
+  echo "$l1" | grep -q "$OK_RGB" \
+    && ok "turns: 38 remaining (>30% of 50) → OK green" \
+    || bad "turns: 38 remaining → OK green" "line1: $l1"
+
+  # since=40 → remaining 10 (≤15, >5) → WARN yellow.
+  l1=$(turns_line1 "40 50")
+  { echo "$l1" | grep -q '10↓' && echo "$l1" | grep -q "$WARN_RGB"; } \
+    && ok "turns: 10 remaining (≤30% of 50) → WARN yellow '10↓'" \
+    || bad "turns: 10 remaining → WARN yellow" "line1: $l1"
+
+  # since=47 → remaining 3 (≤5) → CRIT red.
+  l1=$(turns_line1 "47 50")
+  { echo "$l1" | grep -q '3↓' && echo "$l1" | grep -q "$CRIT_RGB"; } \
+    && ok "turns: 3 remaining (≤10% of 50) → CRIT red '3↓'" \
+    || bad "turns: 3 remaining → CRIT red" "line1: $l1"
+
+  # since > interval → remaining clamped to 0 (never negative).
+  l1=$(turns_line1 "55 50")
+  echo "$l1" | grep -q '0↓' \
+    && ok "turns: since>interval clamps remaining to '0↓'" \
+    || bad "turns: since>interval clamps to '0↓'" "line1: $l1"
+  echo "$l1" | grep -q -- '-5↓' \
+    && bad "turns: clamp prevents negative remaining" "got '-5↓'" \
+    || ok "turns: clamp prevents negative remaining (no '-5↓')"
+
+  # Corrupt / torn / tampered turns file must NOT kill the whole render. Our
+  # writer only ever emits integers, but a partial write leaving a float
+  # ("1.5") would otherwise hit a /bin/sh arithmetic syntax error and blank
+  # the ENTIRE statusline (every line) — the silent-failure class this engine
+  # hardens against. Each corrupt form must render line 1 with no indicator.
+  for bad_val in "1.5 50" "x 50" "12 5x" "garbage"; do
+    printf '%s\n' "$bad_val" > "$TURNS_FILE"
+    l1=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" \
+      < "$FIX/statusline-stdin-full.json" 2>/dev/null | head -n 1)
+    if echo "$l1" | grep -q 'test-project' && ! echo "$l1" | grep -q '↓'; then
+      ok "turns: corrupt file '$bad_val' → line 1 renders, no indicator"
+    else
+      bad "turns: corrupt file '$bad_val' renders safely" "line1: $l1"
+    fi
+  done
+
+  # Absent turns file → NO countdown indicator (turn 0 / headless graceful).
+  rm -f "$TURNS_FILE"
+  l1=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" \
+    < "$FIX/statusline-stdin-full.json" 2>/dev/null | head -n 1)
+  echo "$l1" | grep -q '↓' \
+    && bad "turns: absent file → no indicator" "saw '↓' with no turns file: $l1" \
+    || ok "turns: absent turns file → no countdown indicator (graceful)"
 fi
 
 echo "----"
