@@ -76,6 +76,15 @@ jq -e '.env.MEMORY_PACK_HOME=="'"$PREFIX"'" and .theme=="dark"' "$FH/.claude/set
 jq -e --arg c "bash $SL_LINK" '.statusLine.type=="command" and .statusLine.command==$c' "$FH/.claude/settings.json" >/dev/null \
   && ok "statusline: settings.json .statusLine.command set to symlink" || bad "statusline: settings.json .statusLine set"
 
+# skills: ~/.claude/skills/<name> symlink -> PREFIX/skills/<name>, SKILL.md
+# readable through it (engine owns the skills in-repo, symlinked out)
+for sk in memory-search memory-lint; do
+  L="$FH/.claude/skills/$sk"
+  { [ -L "$L" ] && [ "$(readlink "$L")" = "$PREFIX/skills/$sk" ] && [ -f "$L/SKILL.md" ]; } \
+    && ok "skill: $sk symlink -> PREFIX/skills/$sk, SKILL.md readable" \
+    || bad "skill: $sk symlink -> PREFIX/skills/$sk" "readlink=$(readlink "$L" 2>/dev/null)"
+done
+
 # CLAUDE.md pointer appended, original content kept
 grep -q "$PREFIX/SCHEMA.md" "$FH/.claude/CLAUDE.md" && grep -q 'existing user content' "$FH/.claude/CLAUDE.md" \
   && ok "CLAUDE.md pointer appended, content preserved" || bad "CLAUDE.md pointer appended"
@@ -91,6 +100,8 @@ mp2=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/h
 [ "$mp2" = "12" ] && ok "idempotent re-install (still 12, not 24)" || bad "idempotent re-install" "got $mp2"
 { [ -L "$SL_LINK" ] && [ "$(readlink "$SL_LINK")" = "$PREFIX/statusline-command.sh" ]; } \
   && ok "statusline: symlink stable after idempotent re-install" || bad "statusline: symlink stable on re-install"
+{ [ -L "$FH/.claude/skills/memory-search" ] && [ "$(readlink "$FH/.claude/skills/memory-search")" = "$PREFIX/skills/memory-search" ]; } \
+  && ok "skill: symlink stable after idempotent re-install" || bad "skill: symlink stable on re-install"
 
 # --- uninstall ---
 run --prefix "$PREFIX" --uninstall --yes >/dev/null 2>&1
@@ -100,17 +111,35 @@ mp3=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/h
   && ok "uninstall reverses settings, foreign intact" || bad "uninstall reverses settings" "mp=$mp3"
 { [ ! -e "$SL_LINK" ] && jq -e 'has("statusLine")|not' "$FH/.claude/settings.json" >/dev/null; } \
   && ok "statusline: uninstall removes symlink + .statusLine" || bad "statusline: uninstall removes symlink + .statusLine"
+{ [ ! -e "$FH/.claude/skills/memory-search" ] && [ ! -e "$FH/.claude/skills/memory-lint" ]; } \
+  && ok "skill: uninstall removes symlinks" || bad "skill: uninstall removes symlinks"
 
 # --- foreign-safety: a REAL regular file at ~/.claude/statusline-command.sh
 #     (a user's own, not our symlink) must NEVER be clobbered ---
 SBX2="$(mktemp -d)"; FH2="$SBX2/home"; PFX2="$FH2/.memory-pack"
 mkdir -p "$FH2/.claude"
 printf 'echo MINE\n' > "$FH2/.claude/statusline-command.sh"
+# a pre-existing REAL skill dir of the same name (a user's own) must NOT be clobbered
+mkdir -p "$FH2/.claude/skills/memory-search"
+printf -- '---\nname: mine\ndescription: my own\n---\nMINE SKILL BODY\n' > "$FH2/.claude/skills/memory-search/SKILL.md"
 echo '{}' > "$FH2/.claude/settings.json"
-HOME="$FH2" bash "$INSTALL" --prefix "$PFX2" --yes >/dev/null 2>&1
+HOME="$FH2" bash "$INSTALL" --prefix "$PFX2" --yes >/dev/null 2>&1; rc2=$?
+# install must NOT abort on a pre-existing real skill dir — without the
+# foreign-safe guard, `ln -sfn` over a real dir fails and `set -e` kills
+# the whole install (this is the load-bearing half of foreign-safety).
+[ "$rc2" = "0" ] \
+  && ok "install exits 0 despite pre-existing real skill dir (no set -e abort)" \
+  || bad "install exits 0 despite pre-existing real skill dir" "rc=$rc2"
 { [ ! -L "$FH2/.claude/statusline-command.sh" ] && grep -q 'echo MINE' "$FH2/.claude/statusline-command.sh"; } \
   && ok "statusline: pre-existing real file NOT clobbered (foreign-safe)" \
   || bad "statusline: pre-existing real file NOT clobbered (foreign-safe)"
+# not clobbered AND not polluted: BSD `ln -sfn SRC realdir` exits 0 but
+# drops a stray nested symlink inside the user's dir — the guard must
+# prevent that too, so assert zero symlinks under the real dir.
+{ [ ! -L "$FH2/.claude/skills/memory-search" ] && grep -q 'MINE SKILL BODY' "$FH2/.claude/skills/memory-search/SKILL.md" \
+  && ! find "$FH2/.claude/skills/memory-search" -type l | grep -q .; } \
+  && ok "skill: pre-existing real dir NOT clobbered or polluted (foreign-safe)" \
+  || bad "skill: pre-existing real dir NOT clobbered or polluted (foreign-safe)"
 rm -rf "$SBX2"
 
 echo "----"

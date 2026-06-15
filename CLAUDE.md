@@ -3,11 +3,17 @@
 Session-continuity + auto-memory engine for Claude Code. Git repo
 (`github.com/hophuongnam/memory.pack`, branch `main`), wired globally from
 `~/.claude/settings.json` — hooks run by **absolute path**, never symlinked
-per-project. `hooks/` is the single source of truth. `statusline-command.sh`
-(repo root) is the one symlinked artifact: `~/.claude/statusline-command.sh`
-→ here, invoked through that symlink by settings.json `statusLine.command`.
+per-project. `hooks/` is the single source of truth. Two kinds of artifact
+are symlinked into `~/.claude` so the repo OWNS them (version-controlled):
+`statusline-command.sh` (repo root) → `~/.claude/statusline-command.sh`
+(invoked via settings.json `statusLine.command`), and each `skills/<name>/`
+→ `~/.claude/skills/<name>` — the `memory-search` + `memory-lint` skills CC
+discovers (symlink-following + `$MEMORY_PACK_HOME`-portable bodies verified
+CC 2.1.177; see `reference_cc_skill_symlink_discovery` in the project store).
 This project owns its development (relocated out of the Management project
-2026-05-18); `install.sh` wires the symlink + `.statusLine` on any host.
+2026-05-18); `install.sh` wires both symlinks + `.statusLine` on any host,
+foreign-safe (a pre-existing real file/dir of the same name is never
+clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Working style (this project)
 
@@ -125,8 +131,12 @@ null-command-safe settings.json merge; `--uninstall`/`--check`;
 `merge-settings.sh --statusline` (opt-in arg; ownership keyed on basename
 `statusline-command.sh` exactly like hooks; foreign statuslines + sibling
 keys e.g. `padding` untouched; a pre-existing real file is never clobbered;
-`--uninstall` removes the owned symlink + `.statusLine`). Covered by
-`test_install` + `test_settings_merge`. **Windows = WSL2** (engine runs unchanged). A native
+`--uninstall` removes the owned symlink + `.statusLine`). Likewise each
+`$PREFIX/skills/<name>` → `~/.claude/skills/<name>` (foreign-safe, same
+ownership rule; real dir of the same name skipped + warned) — skills are
+auto-discovered, so they have NO settings.json entry (covered by
+`test_install` only; the statusline path is covered by `test_install` +
+`test_settings_merge`). **Windows = WSL2** (engine runs unchanged). A native
 PowerShell port was analyzed and **deliberately declined** (permanent
 dual-maintenance, negative-EV, reinvites silent amnesia). Native-only
 boundary documented at `tests/test_path_portability.mjs:1` — do NOT "fix"

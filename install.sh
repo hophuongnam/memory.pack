@@ -83,6 +83,15 @@ if $UNINSTALL; then
       "$PREFIX"/*) rm -f "$SL_LINK"; say "removed statusline symlink $SL_LINK" ;;
     esac
   fi
+  # remove engine skill symlinks only if they are ours (point into $PREFIX)
+  if [ -d "$CLAUDE_DIR/skills" ]; then
+    for sl in "$CLAUDE_DIR"/skills/*; do
+      [ -L "$sl" ] || continue
+      case "$(readlink "$sl")" in
+        "$PREFIX"/skills/*) rm -f "$sl"; say "removed skill symlink $sl" ;;
+      esac
+    done
+  fi
   if $PURGE; then rm -rf "$PREFIX"; say "purged engine dir $PREFIX"; fi
   say "uninstall complete."
   exit 0
@@ -133,6 +142,27 @@ else
   ln -sfn "$SL_SRC" "$SL_LINK"
   SL_MERGE=(--statusline "$SL_LINK")
   say "linked statusline: $SL_LINK -> $SL_SRC"
+fi
+
+# ---- skills symlinks (idempotent, foreign-safe) ---------------------
+# ~/.claude/skills/<name> -> $PREFIX/skills/<name> for each engine skill,
+# so the repo OWNS them (version-controlled) and edits go live without a
+# reinstall — same trick as the statusline. A pre-existing REAL dir of the
+# same name (a user's own skill) is never clobbered. CC follows these
+# symlinks during skill discovery (verified CC 2.1.177).
+if [ -d "$PREFIX/skills" ]; then
+  mkdir -p "$CLAUDE_DIR/skills"
+  for skdir in "$PREFIX"/skills/*/; do
+    [ -d "$skdir" ] || continue
+    name="$(basename "$skdir")"
+    link="$CLAUDE_DIR/skills/$name"
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+      warn "$link is a real dir (not our symlink) — left untouched; skill '$name' not linked"
+    else
+      ln -sfn "$PREFIX/skills/$name" "$link"
+      say "linked skill: $link -> $PREFIX/skills/$name"
+    fi
+  done
 fi
 
 # ---- 3. merge settings.json ------------------------------------------
