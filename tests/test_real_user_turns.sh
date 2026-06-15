@@ -27,7 +27,10 @@
 # _mp_conversation_chars); 2) session-end.sh behavioral (trivial-skip
 # + carry-forward vs replay launch, with node stubbed via PATH, incl. the
 # substance-rescue axes + knobs + 0-turn guard); 3)
-# auto-save-stop.sh behavioral (tool-heavy session must NOT trigger).
+# auto-save-stop.sh behavioral (SMALL tool-heavy must NOT trigger; LARGE
+# tool-heavy DOES via the bytes axis — MP_AUTOSAVE_MIN_BYTES, knob pinned
+# both ways; byte-trip leaves the turn baseline untouched / independent
+# "<turns> <bytes>" baselines keep the statusline countdown honest).
 
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -412,6 +415,65 @@ printf '{"session_id":"sid-zero-turns","stop_hook_active":false,"transcript_path
 [ ! -f "$HOME/.claude/hook_state/sid-zero-turns_turns" ] \
   && ok "auto-save-stop: 0-turn Stop writes NO turns file (clean / last-good)" \
   || bad "auto-save-stop: 0-turn Stop writes NO turns file" "file created on a 0-turn Stop"
+
+# --- layer 3c: transcript-SIZE axis (tool-heavy, few real turns) ------------
+# A turn-only gate never checkpoints a tool-heavy session: measured 2026-06-13,
+# a real 2MB transcript held only 2 real turns and ~14k conversation chars
+# (below the 25k chars floor too) — tool work shows up in BYTES, nothing else.
+# At SAVE_INTERVAL=10 such a session ends without a single auto-save → silent
+# amnesia, the engine's core failure mode. auto-save-stop must therefore ALSO
+# trip when bytes-since-save ≥ MP_AUTOSAVE_MIN_BYTES (default 200000). Mirrors
+# session-end's bytes-axis rescue (layer 2b/B).
+BIGRES=$(printf '%02000d' 0)
+TOOLY="$SBX/autosave-tooly.jsonl"
+: > "$TOOLY"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$TOOLY"
+i=1
+while [ "$i" -le 120 ]; do
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$TOOLY"
+  i=$((i + 1))
+done
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$TOOLY"   # ~250KB raw, 2 real turns
+
+OUT=$(printf '{"session_id":"sid-tooly","stop_hook_active":false,"transcript_path":"%s"}' "$TOOLY" \
+  | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) ok "auto-save-stop: 2-turn ~250KB session triggers via bytes axis" ;;
+  *) bad "auto-save-stop: 2-turn ~250KB session triggers via bytes axis" "no block: $OUT" ;;
+esac
+
+# Independence pin: a byte-only trip must NOT advance the TURN baseline, or the
+# statusline countdown resets to full on every size-save in tool-heavy sessions
+# (turns climb slowly) — it would sit near-full while saves fire "out of
+# nowhere". Fresh session → turn baseline 0; after a byte trip the _last_save
+# turn field stays 0 while the byte field jumps to the transcript size. A
+# coupled impl would write "2 <bytes>" here.
+ls_turns=""; ls_bytes=""
+LSF="$HOME/.claude/hook_state/sid-tooly_last_save"
+[ -f "$LSF" ] && read ls_turns ls_bytes < "$LSF"
+{ [ "$ls_turns" = "0" ] && [ "${ls_bytes:-0}" -ge 200000 ]; } 2>/dev/null \
+  && ok "auto-save-stop: byte-trip leaves turn baseline untouched (independent baselines)" \
+  || bad "auto-save-stop: byte-trip leaves turn baseline untouched (independent baselines)" "_last_save='$ls_turns $ls_bytes'"
+
+# Mutation guard (threshold UP): same 2-turn fixture with the byte bar maxed →
+# byte axis can't fire and 2 turns is far below SAVE_INTERVAL → NO block. Flips
+# on the byte axis ALONE (a ≥10-turn fixture would block for the wrong reason).
+# Pins MP_AUTOSAVE_MIN_BYTES as a real plumbed knob, not a hardcoded constant.
+OUT=$(printf '{"session_id":"sid-tooly-hi","stop_hook_active":false,"transcript_path":"%s"}' "$TOOLY" \
+  | MP_AUTOSAVE_MIN_BYTES=999999999 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) bad "auto-save-stop: raised MP_AUTOSAVE_MIN_BYTES disables byte axis" "blocked: $OUT" ;;
+  *) ok "auto-save-stop: raised MP_AUTOSAVE_MIN_BYTES disables byte axis (2 turns, no turn trip)" ;;
+esac
+
+# Mutation guard (threshold DOWN): the tiny ~5KB HEAVY fixture (3 turns) clears
+# a 1000-byte bar → blocks. Proves the knob plumbs downward too.
+OUT=$(printf '{"session_id":"sid-heavy-lo","stop_hook_active":false,"transcript_path":"%s"}' "$HEAVY" \
+  | MP_AUTOSAVE_MIN_BYTES=1000 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) ok "auto-save-stop: lowered MP_AUTOSAVE_MIN_BYTES rescues a small session" ;;
+  *) bad "auto-save-stop: lowered MP_AUTOSAVE_MIN_BYTES rescues a small session" "no block: $OUT" ;;
+esac
 
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }
