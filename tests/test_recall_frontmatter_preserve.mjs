@@ -17,7 +17,7 @@
 // flatten-rebuild is removed.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -94,6 +94,24 @@ const flattened = '---\nname: x\nmetadata:\ntype: project\n---\nbody\n';
 (!flattened.includes('\n  type: project\n'))
   ? ok('mutation check: flattened block correctly fails indent needle')
   : bad('mutation check: detector not vacuous', 'flattened detected', 'missed');
+
+// === Re-read must NOT rewrite the file (the Edit "modified since read" race) ===
+// A second Read in the SAME session is byte-identical (recall_count already
+// bumped, last_recalled already today). The hook must SKIP the write — a
+// tmp+rename changes the inode/ctime and busts the Edit tool's post-read
+// freshness check (see feedback_memory_edit_recall_race.md). RED until
+// update-recall.mjs short-circuits on `out === body`.
+{
+  const path = join(tmp, 'reread.md');
+  writeFileSync(path, '---\nname: rr\ndescription: d\ntype: feedback\ncreated: 2026-05-18\n---\nbody\n');
+  const sid = 'sid-reread';
+  execFileSync('node', [RECALL, path, sid], { encoding: 'utf8' }); // 1st read: bumps + writes
+  const afterFirst = readFileSync(path, 'utf8');
+  const inoFirst = statSync(path).ino;
+  execFileSync('node', [RECALL, path, sid], { encoding: 'utf8' }); // 2nd read: must be a no-op
+  eq('re-read: content byte-identical', afterFirst, readFileSync(path, 'utf8'));
+  eq('re-read: inode unchanged (file not rewritten)', inoFirst, statSync(path).ino);
+}
 
 rmSync(tmp, { recursive: true, force: true });
 console.log('----');

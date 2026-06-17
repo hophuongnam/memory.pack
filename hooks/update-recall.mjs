@@ -77,6 +77,16 @@ fmSetInPlace(lines, 'last_recalled', today);
 
 const out = fmSerialize(lines, rest);
 
+// ponytail: byte-identical re-read → skip the write entirely. A tmp+rename
+// changes the inode/ctime even when the bytes don't, which busts the Edit
+// tool's post-read freshness check (the "modified since read" race — see
+// feedback_memory_edit_recall_race.md). Same-session re-reads land here
+// (count already bumped, last_recalled already today), so this makes a
+// re-read a true no-op and stops pointless file churn. The first read of a
+// session still bumps+writes; that Read→Edit window is the residual race the
+// Bash+Python workaround covers.
+if (out === body) process.exit(0);
+
 // Preserve original mtime so `/memory-lint --decay` still sees the real
 // "last substantive write" time for legacy memories that lack a `created`
 // frontmatter field (the decay scorer falls back to mtime when `created`
