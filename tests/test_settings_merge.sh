@@ -1,10 +1,10 @@
 #!/bin/bash
-# TDD: install/merge-settings.sh must merge the 11 Memory.Pack hook entries
+# TDD: install/merge-settings.sh must merge the 13 Memory.Pack hook entries
 # into an EXISTING ~/.claude/settings.json that also contains foreign
 # (SuperIsland) hooks, a null-command hook entry (real hazard seen in the
 # live file), a stale MP entry under an old prefix, plus unrelated
 # top-level keys (.permissions, .env, .theme). It must:
-#   - inject all 11 MP entries with command = $PREFIX/hooks/<script>
+#   - inject all 13 MP entries with command = $PREFIX/hooks/<script>
 #   - be idempotent (run twice -> byte-identical)
 #   - replace stale-prefix MP entries (upgrade path)
 #   - NEVER drop/alter foreign entries, the null-command entry, or any
@@ -51,12 +51,12 @@ if [ ! -f "$MERGE" ]; then echo "FAIL  install/merge-settings.sh missing ($MERGE
   || { bad "merge exits 0" "$(cat "$TMP/err")"; echo "----"; echo "$fail FAILED"; exit 1; }
 jq -e . "$TMP/after.json" >/dev/null 2>&1 && ok "output is valid JSON" || bad "output is valid JSON" "$(cat "$TMP/err")"
 
-mpcount() { jq '[.hooks[]?[]?.hooks[]? | select((.command//"")|test("/hooks/(boot-inject|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$"))] | length' "$1"; }
+mpcount() { jq '[.hooks[]?[]?.hooks[]? | select((.command//"")|test("/hooks/(boot-inject|boot-catchup|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$"))] | length' "$1"; }
 c=$(mpcount "$TMP/after.json")
-[ "$c" = "12" ] && ok "all 12 MP entries present" || bad "all 12 MP entries present" "got $c"
+[ "$c" = "13" ] && ok "all 13 MP entries present" || bad "all 13 MP entries present" "got $c"
 
 # every MP command uses the new prefix; none keep the stale /old prefix
-badpfx=$(jq -r '[.hooks[]?[]?.hooks[]?.command//empty | select(test("/hooks/(boot-inject|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$")) | select(startswith("'"$PREFIX"'/hooks/")|not)] | length' "$TMP/after.json")
+badpfx=$(jq -r '[.hooks[]?[]?.hooks[]?.command//empty | select(test("/hooks/(boot-inject|boot-catchup|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$")) | select(startswith("'"$PREFIX"'/hooks/")|not)] | length' "$TMP/after.json")
 [ "$badpfx" = "0" ] && ok "all MP commands use new prefix (stale replaced)" || bad "stale prefix replaced" "$badpfx wrong-prefix"
 
 # spot-check a specific entry: PostToolUse/MultiEdit -> memory-index-update.sh t=3

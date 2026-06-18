@@ -3,6 +3,7 @@
   "entries": [
     { "event": "SessionStart",                          "script": "boot-inject.sh",            "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "boot-inject.sh",            "timeout": 10 },
+    { "event": "PostToolUse",                            "script": "boot-catchup.sh",           "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "memory-search-inject.sh",   "timeout": 5  },
     { "event": "PostToolUse",      "matcher": "Read",    "script": "memory-recall.sh",          "timeout": 3  },
     { "event": "PostToolUse",      "matcher": "Write",   "script": "archive-resurrect.sh",      "timeout": 3  },

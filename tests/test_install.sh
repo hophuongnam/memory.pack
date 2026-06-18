@@ -52,6 +52,16 @@ else bad "install exits 0" "$(tail -3 "$SBX/log")"; fi
 
 [ -f "$PREFIX/hooks/_lib.sh" ] && [ -f "$PREFIX/hooks/boot-inject.sh" ] && [ -f "$PREFIX/index/index-memories.py" ] \
   && ok "engine files placed at prefix" || bad "engine files placed at prefix"
+# every wired hook must actually LAND at PREFIX executable — a hook merged into
+# settings.json but not copied (or not +x) is a silent no-op (the failure class
+# boot-catchup itself guards against). Generic over the manifest so a new entry
+# can't be wired-but-missing.
+missing=""
+for sc in $(jq -r '.entries[].script' "$SRC/install/hooks.manifest.json" | sort -u); do
+  [ -x "$PREFIX/hooks/$sc" ] || missing="$missing $sc"
+done
+[ -z "$missing" ] && ok "all manifest hook scripts present + executable at prefix" \
+  || bad "all manifest hook scripts present + executable at prefix" "missing/non-exec:$missing"
 [ ! -e "$PREFIX/.git" ] && ok "no .git shipped" || bad "no .git shipped"
 [ ! -e "$PREFIX/index/search.db" ] || \
   { [ -f "$PREFIX/index/search.db" ] && [ ! -s "$PREFIX/index/search.db.SHIPPED" ]; }
@@ -59,9 +69,9 @@ if find "$PREFIX" -name 'search.db' -path '*/index/*' -newer "$SRC/install.sh" >
    && [ -f "$PREFIX/index/search.db" ]; then ok "search.db is freshly built, not shipped"; else
    [ -f "$PREFIX/index/search.db" ] && ok "search.db is freshly built, not shipped" || bad "search.db built"; fi
 
-# settings merged: 12 MP entries w/ prefix, foreign survives, env set
+# settings merged: 13 MP entries w/ prefix, foreign survives, env set
 mp=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp" = "12" ] && ok "settings.json: 12 MP entries with prefix" || bad "12 MP entries" "got $mp"
+[ "$mp" = "13" ] && ok "settings.json: 13 MP entries with prefix" || bad "13 MP entries" "got $mp"
 jq -e '.hooks.PreToolUse[]?.hooks[]?|select(.command=="/foreign/x.sh")' "$FH/.claude/settings.json" >/dev/null \
   && ok "settings.json: foreign hook survived" || bad "foreign hook survived"
 jq -e '.env.MEMORY_PACK_HOME=="'"$PREFIX"'" and .theme=="dark"' "$FH/.claude/settings.json" >/dev/null \
@@ -97,7 +107,7 @@ grep -q "$PREFIX/SCHEMA.md" "$FH/.claude/CLAUDE.md" && grep -q 'existing user co
 # --- idempotent ---
 run --prefix "$PREFIX" --yes >/dev/null 2>&1
 mp2=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp2" = "12" ] && ok "idempotent re-install (still 12, not 24)" || bad "idempotent re-install" "got $mp2"
+[ "$mp2" = "13" ] && ok "idempotent re-install (still 13, not 26)" || bad "idempotent re-install" "got $mp2"
 { [ -L "$SL_LINK" ] && [ "$(readlink "$SL_LINK")" = "$PREFIX/statusline-command.sh" ]; } \
   && ok "statusline: symlink stable after idempotent re-install" || bad "statusline: symlink stable on re-install"
 { [ -L "$FH/.claude/skills/memory-search" ] && [ "$(readlink "$FH/.claude/skills/memory-search")" = "$PREFIX/skills/memory-search" ]; } \

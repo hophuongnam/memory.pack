@@ -32,11 +32,29 @@ clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Architecture
 
-**12 hook registrations** (canonical list: `install/hooks.manifest.json`):
+**13 hook registrations** (canonical list: `install/hooks.manifest.json`):
 `SessionStart`→boot-inject; `UserPromptSubmit`→boot-inject + memory-search-inject;
 `SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
-log-token-rate; `PostToolUse` Read→memory-recall, Write→archive-resurrect +
-memory-index-update, Edit/MultiEdit→memory-index-update.
+log-token-rate; `PostToolUse` (matcher-less, all tools)→boot-catchup,
+Read→memory-recall, Write→archive-resurrect + memory-index-update,
+Edit/MultiEdit→memory-index-update. Boot context is thus injected at THREE
+sites — SessionStart (polls 4s), UserPromptSubmit (polls 9s), and
+`boot-catchup.sh` on PostToolUse (mid-turn catch-up): when the prior
+session's detached replay outlasts both poll windows the `.boot-context-<hash>`
+lands mid-turn and only the next prompt would inject it — too late for a long
+turn in flight. boot-catchup fast-rejects forklessly (`${0%/*}` + glob) when
+the shared `hooks/` dir holds NO live context; otherwise — that dir is shared
+across ALL projects, each writing its own `.boot-context-<hash>` — it reads
+stdin and resolves THIS session's hash (`_mp_resolve_project_key`, exactly
+like boot-inject, invariant #4) and `exec`s boot-inject.sh ONLY for our own
+`.boot-context-<hash>`. Handing a foreign project's unconsumed leftover to
+boot-inject would make it emit "[No boot context available]" + flip our marker
+to `none` on every tool call (the shared-dir contamination class — pinned by
+`test_boot_catchup`). boot-inject already handles `EVENT=PostToolUse` and emits
+the context as `additionalContext` (CC injects a PostToolUse hook's
+additionalContext into the model on its next request within the SAME turn —
+verified in bundle 2.1.181, see
+`reference_cc_posttooluse_additionalcontext` in the project store).
 
 **Two-pass replay** (`hooks/replay.mjs`, detached by `session-end.sh` via
 `nohup`/`disown`; model `claude-sonnet-4-6`, `maxTurns:6`, `tools:[]`):
@@ -152,7 +170,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-22 suites in `tests/` — run all before any commit (CI mirrors the same
+23 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`):
 
 ```
@@ -274,7 +292,18 @@ newest samples surviving; boot-inject SessionStart sweeps legacy
 `metadata:` children/`node_type` survive byte-for-byte while
 created/recall_count inherit and last_reviewed stamps; malformed files
 untouched; pins the shared `fmParse`/`fmSetInPlace`/`fmSerialize` in
-`_lib.mjs` consumed by BOTH update-recall.mjs and archive-resurrect.mjs).
+`_lib.mjs` consumed by BOTH update-recall.mjs and archive-resurrect.mjs),
+`test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
+that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
+`.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs
+boot-inject to isolate the gate, with a mutation that strips the `-last-`
+exclusion and watches the stale snapshot leak through; Layer 2 runs the
+REAL boot-inject with an `EVENT=PostToolUse` stdin and asserts it emits
+`hookEventName:"PostToolUse"` additionalContext + mv's the live file to the
+carry-forward snapshot + injects nothing on the next tool call once the gate
+is dry; guards the mid-turn analog of the boot-context injection path — a
+slow prior-session replay landing after both poll windows must not leave a
+long turn blind).
 Two accepted patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only

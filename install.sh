@@ -172,7 +172,7 @@ tmp="$(mktemp)"
 "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" "${SL_MERGE[@]+"${SL_MERGE[@]}"}" < "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "merge produced invalid JSON — $SETTINGS untouched (backup: $SETTINGS.mp-bak)"; }
 mv "$tmp" "$SETTINGS"
-say "merged 12 Memory.Pack hooks + env.MEMORY_PACK_HOME${SL_MERGE[0]:+ + .statusLine} into $SETTINGS (backup: $SETTINGS.mp-bak)"
+say "merged $(jq '.entries|length' "$MANIFEST") Memory.Pack hooks + env.MEMORY_PACK_HOME${SL_MERGE[0]:+ + .statusLine} into $SETTINGS (backup: $SETTINGS.mp-bak)"
 
 # ---- 4. CLAUDE.md pointer (idempotent) -------------------------------
 PTR="See \`$PREFIX/SCHEMA.md\` for the canonical auto-memory schema (Memory.Pack)."
