@@ -83,13 +83,22 @@ skips only when turns ≤5 AND the session is small on BOTH substance axes:
 autonomous monster worth replaying, and tool-heavy monsters hold few
 conversation chars so BOTH axes are load-bearing; 0-turn headless
 sessions always skip). Tool-heavy sessions accrue REAL turns too slowly
-to ever reach 10 (a measured 2026-06-13 session: 2MB / 2 turns / 14k
-conversation chars — below the 25k chars floor too), so (a) ALSO trips
-when raw transcript grows ≥ `MP_AUTOSAVE_MIN_BYTES` (200k, env-tunable)
-since the last byte-save; the two axes keep INDEPENDENT baselines in
-`${sid}_last_save` (`"<turns> <bytes>"`, legacy one-field tolerated) so a
-size-save never resets the statusline turn-countdown (which tracks the
-turn axis alone — a size-save can fire sooner)
+to ever reach 10 (a measured 2026-06-13 session: 2MB / 2 turns), so (a)
+ALSO trips when RELEVANT OUTPUT grows ≥ `MP_AUTOSAVE_MIN_CHARS` (100k,
+env-tunable) since the last size-save. Relevant output
+(`_mp_relevant_output_chars`) = conversation + exec results
+(Bash/remote_run/remote_script) + edit inputs (Edit/Write/MultiEdit/
+NotebookEdit); NOT raw `wc -c`, which OVER-fired — on context-heavy
+sessions file-reads + attachments dominate the transcript (a 2.6MB
+NexusLit session fired on prompt 1 at only ~180k relevant), so the raw
+axis checkpointed on context volume, not work. Narrowing fixes the
+over-fire; the LIVE checkpoint still feeds Claude its FULL context, so
+this is fire-RATE, not what the detached replay (extractConversation)
+saves. The two axes keep INDEPENDENT baselines in `${sid}_last_save`
+(`"<turns> <relevant>"`, legacy `<bytes>` 2nd field tolerated — read as
+relevant, a stale large value just makes the delta negative until
+re-baselined) so a size-save never resets the statusline turn-countdown
+(which tracks the turn axis alone — a size-save can fire sooner)
 → Claude writes bodies. (b) `boot-inject.sh`
 writes `sessions.log.md`/`SESSIONS.md`. (c) `replay.mjs` pass 2 writes
 `PENDING_MEMORIES.md`. (d) `memory-recall.sh`→`update-recall.mjs` edits
@@ -250,10 +259,10 @@ carries its camel twin on the same line, plus behavioral camel-only
 stdin through auto-save-stop — trigger fires — and memory-recall —
 recall_count bumps AND per-session dedup holds; the dedup loss was the
 nasty one: empty session_id inflated counts → wrong auto-promotions),
-`test_real_user_turns` (`_mp_real_user_turns` + `_mp_conversation_chars`
-units + session-end trivial-skip/carry-forward behavioral with node
-stubbed via PATH + the auto-save SMALL-tool-heavy no-trigger AND
-LARGE-tool-heavy bytes-axis trigger cases; pins that
+`test_real_user_turns` (`_mp_real_user_turns` + `_mp_conversation_chars` +
+`_mp_relevant_output_chars` units + session-end trivial-skip/carry-forward
+behavioral with node stubbed via PATH + the auto-save SMALL-tool-heavy
+no-trigger AND relevant-output size-axis trigger cases; pins that
 turn counters count REAL prompts, not tool_result/isMeta entries — a real
 594-line transcript held 153 user-type entries but 2 prompts — AND the
 substance rescue: few-turn sessions big on either axis (conversation
@@ -262,12 +271,15 @@ knobs mutation-pinned in both directions; the chars helper mirrors
 `extractConversation` incl. first-assistant-block-only; plus auto-save-stop
 caching `<since_last> <interval>` to `${sid}_turns` every Stop for the
 statusline countdown — value-pinned, skipped on 0-turn Stops; plus the
-SIZE axis: a 2-turn ~250KB session trips via `MP_AUTOSAVE_MIN_BYTES`
-(default 200k) while a 2-turn fixture with the bar maxed does NOT (flips
-on the byte axis ALONE — fixture kept <10 turns so the turn axis can't
-mask it), knob pinned both directions, and a byte-trip leaves the TURN
-baseline untouched so the countdown stays honest — independent
-`"<turns> <bytes>"` baselines in `${sid}_last_save`),
+RELEVANT-OUTPUT size axis (`_mp_relevant_output_chars` = conv +
+Bash/remote results + Edit/Write inputs): a big-raw file-READ session does
+NOT trip (raw bytes over-fire on context volume) while Bash-heavy AND
+Edit-heavy 2-turn sessions DO — the edit-input term is mutation-pinned
+(emptying the edit-tool set drops edit-heavy work and re-opens the amnesia
+gap) — `MP_AUTOSAVE_MIN_CHARS` (default 100k) knob pinned both directions,
+and a relevant-trip leaves the TURN baseline untouched so the countdown
+stays honest — independent `"<turns> <relevant>"` baselines in
+`${sid}_last_save`),
 `test_replay_extraction` (`extractConversation`: isMeta string/array
 exclusion, tool_result exclusion, array-text prompt inclusion;
 `truncateConversation`: head/tail preservation + elision marker + default

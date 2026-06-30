@@ -172,6 +172,58 @@ _mp_conversation_chars() {
   esac
 }
 
+# _mp_relevant_output_chars: the auto-save SIZE axis. Measures "relevant output"
+# = conversation chars (extractConversation-equivalent: non-isMeta user prompts
+# + each assistant's FIRST text block) PLUS the irreversible-work side of each
+# tool — exec RESULTS (Bash / remote_run / remote_script tool_result bodies,
+# joined to their tool_use by id) and edit INPUTS (Edit/Write/MultiEdit/
+# NotebookEdit tool_use input). EXCLUDES Read/Grep/Glob results, attachments,
+# thinking, and non-edit tool_use args — context the agent pulled in, not work
+# it produced. Why narrow vs raw `wc -c`: on context-heavy sessions the
+# transcript is dominated by file-reads/attachments, so a raw-byte axis fires on
+# prompt 1 for pure context (the NexusLit case: 2.6MB raw, ~180k relevant). This
+# tracks substance, not volume — the LIVE checkpoint still feeds the agent its
+# full context, so this is about fire-RATE, not about what the detached replay
+# saves. Codepoint count. The shell-exec name list + edit-tool list are the
+# deliberate work-tool set; extend the regex/array for other exec/edit tools.
+_mp_relevant_output_chars() {
+  _mp_t="$1"
+  if [ -z "$_mp_t" ] || [ ! -f "$_mp_t" ]; then
+    printf '0'
+    return 0
+  fi
+  _mp_n=$(jq -cR 'fromjson? // empty' "$_mp_t" 2>/dev/null | jq -sr '
+    def is_exec($n): ($n // "") | test("(^|__)(Bash|remote_run|remote_script)$");
+    (reduce (.[] | select(.type == "assistant")
+                 | .message.content[]? | select(.type == "tool_use")) as $tu
+       ({}; . + {($tu.id // ""): ($tu.name // "")})) as $names
+    | [ .[]
+        | if .type == "user" and ((.isMeta // false) | not) then
+            (.message.content | type) as $ct |
+            if   $ct == "string" then (.message.content | length)
+            elif $ct == "array"  then
+              (if ([.message.content[].type] | index("tool_result")) != null
+               then ([ .message.content[]
+                       | select(.type == "tool_result")
+                       | select(is_exec($names[.tool_use_id // ""]))
+                       | (.content | if type == "string" then . else tojson end) | length
+                     ] | add // 0)
+               else ([.message.content[] | select(.type == "text" and ((.text // "") != "")) | .text] | join("\n") | length)
+               end)
+            else 0 end
+          elif .type == "assistant" then
+            ( ([.message.content[]? | select(.type == "text" and ((.text // "") != "")) | .text] | first // "" | length)
+              + ([.message.content[]?
+                  | select(.type == "tool_use" and ((.name // "") as $n | ["Edit","Write","MultiEdit","NotebookEdit"] | index($n)))
+                  | (.input // {} | tojson | length)] | add // 0) )
+          else 0 end
+      ] | add // 0' 2>/dev/null)
+  case "$_mp_n" in
+    ''|*[!0-9]*) printf '0' ;;
+    *) printf '%s' "$_mp_n" ;;
+  esac
+}
+
 # _mp_have_nerdfont: returns 0 if a Nerd Font is available for the statusline
 # icon set, 1 otherwise. Env override MEMORY_PACK_NERDFONT={1,true,yes} forces
 # yes, MEMORY_PACK_NERDFONT={0,false,no} forces no, empty/unset falls through

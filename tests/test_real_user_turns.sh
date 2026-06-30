@@ -27,10 +27,12 @@
 # _mp_conversation_chars); 2) session-end.sh behavioral (trivial-skip
 # + carry-forward vs replay launch, with node stubbed via PATH, incl. the
 # substance-rescue axes + knobs + 0-turn guard); 3)
-# auto-save-stop.sh behavioral (SMALL tool-heavy must NOT trigger; LARGE
-# tool-heavy DOES via the bytes axis — MP_AUTOSAVE_MIN_BYTES, knob pinned
-# both ways; byte-trip leaves the turn baseline untouched / independent
-# "<turns> <bytes>" baselines keep the statusline countdown honest).
+# auto-save-stop.sh behavioral (SMALL tool-heavy must NOT trigger; a big-raw
+# file-READ session must NOT trigger while Bash-heavy AND Edit-heavy sessions DO
+# — the size axis measures RELEVANT OUTPUT (conv + exec results + edit inputs),
+# not raw bytes — MP_AUTOSAVE_MIN_CHARS, knob pinned both ways; a relevant-trip
+# leaves the turn baseline untouched / independent "<turns> <relevant>"
+# baselines keep the statusline countdown honest).
 
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -114,6 +116,53 @@ got=$(_mp_conversation_chars "$SBX/does-not-exist.jsonl" 2>/dev/null)
 
 got=$(_mp_conversation_chars "$SBX/empty.jsonl" 2>/dev/null)
 [ "$got" = "0" ] && ok "unit: conversation chars empty transcript → 0" || bad "unit: conversation chars empty transcript → 0" "got '$got'"
+
+# --- layer 1c: _mp_relevant_output_chars unit ------------------------------
+# The auto-save SIZE axis measures "relevant output" = conversation chars
+# (extractConversation-equivalent) + the irreversible-work side of each tool:
+# exec RESULTS (Bash / remote_run / remote_script tool_result bodies, joined via
+# tool_use_id→name) + edit INPUTS (Edit/Write/MultiEdit/NotebookEdit tool_use
+# input). It EXCLUDES Read/Grep/Glob results, attachments, thinking, and
+# non-edit tool_use args — context the agent pulled in, not work it produced.
+# Rationale is over-fire, not un-saved-bytes: the LIVE checkpoint feeds the live
+# agent its full context; narrowing the axis just makes fire-rate track
+# substance instead of context volume (the NexusLit "fires on prompt 1" case:
+# 2.6MB raw, ~180k relevant). Expected total is hand-computed (jq tojson lengths
+# verified: {"a":"bb"}=10):
+#   10 (user string) + 5 (asst FIRST text; Bash tool_use ignored)
+#   + 8 (Bash tool_result) + 10 (Write input {"a":"bb"}) + 0 (Read tool_use)
+#   + 0 (Read result — not exec) + 0 (remote_run tool_use) + 3 (remote_run
+#   result — exec) + 0 (isMeta) + 0 (orphan result) = 36
+if ! type _mp_relevant_output_chars >/dev/null 2>&1; then
+  bad "_lib.sh exports _mp_relevant_output_chars" "helper not defined"
+else
+  ok "_lib.sh exports _mp_relevant_output_chars"
+fi
+
+RELV="$SBX/relevant.jsonl"
+cat > "$RELV" <<'JL'
+{"type":"user","message":{"role":"user","content":"0123456789"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"aaaaa"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","content":"BBBBBBBB"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"e1","name":"Write","input":{"a":"bb"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"r1","name":"Read","input":{}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"ZZZZZZ"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"rr1","name":"mcp__remote-shell__remote_run","input":{}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"rr1","content":"RRR"}]}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"qqqq"}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan","content":"YYYY"}]}}
+{"broken json
+JL
+got=$(_mp_relevant_output_chars "$RELV" 2>/dev/null)
+[ "$got" = "36" ] \
+  && ok "unit: relevant output = 36 (conv + Bash/remote results + edit input; Read/orphan/isMeta excluded)" \
+  || bad "unit: relevant output = 36" "got '$got'"
+
+got=$(_mp_relevant_output_chars "$SBX/does-not-exist.jsonl" 2>/dev/null)
+[ "$got" = "0" ] && ok "unit: relevant output missing transcript → 0" || bad "unit: relevant output missing transcript → 0" "got '$got'"
+
+got=$(_mp_relevant_output_chars "$SBX/empty.jsonl" 2>/dev/null)
+[ "$got" = "0" ] && ok "unit: relevant output empty transcript → 0" || bad "unit: relevant output empty transcript → 0" "got '$got'"
 
 # --- layer 2: session-end.sh behavioral -----------------------------------
 ENGINE="$SBX/engine/hooks"
@@ -416,63 +465,107 @@ printf '{"session_id":"sid-zero-turns","stop_hook_active":false,"transcript_path
   && ok "auto-save-stop: 0-turn Stop writes NO turns file (clean / last-good)" \
   || bad "auto-save-stop: 0-turn Stop writes NO turns file" "file created on a 0-turn Stop"
 
-# --- layer 3c: transcript-SIZE axis (tool-heavy, few real turns) ------------
-# A turn-only gate never checkpoints a tool-heavy session: measured 2026-06-13,
-# a real 2MB transcript held only 2 real turns and ~14k conversation chars
-# (below the 25k chars floor too) — tool work shows up in BYTES, nothing else.
-# At SAVE_INTERVAL=10 such a session ends without a single auto-save → silent
-# amnesia, the engine's core failure mode. auto-save-stop must therefore ALSO
-# trip when bytes-since-save ≥ MP_AUTOSAVE_MIN_BYTES (default 200000). Mirrors
-# session-end's bytes-axis rescue (layer 2b/B).
-BIGRES=$(printf '%02000d' 0)
-TOOLY="$SBX/autosave-tooly.jsonl"
-: > "$TOOLY"
-printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$TOOLY"
+# --- layer 3c: relevant-output SIZE axis (tool-heavy, few real turns) --------
+# A turn-only gate never checkpoints a few-turn session that does heavy work.
+# But RAW bytes over-measure: a session that only READS big files/attachments
+# accrues megabytes of context that is NOT work, so a raw-byte axis fires on
+# prompt 1 for pure context (the NexusLit case: 2.6MB raw, ~180k relevant). The
+# size axis therefore measures RELEVANT OUTPUT (_mp_relevant_output_chars) =
+# conversation + exec results (Bash/remote_run/remote_script) + edit inputs
+# (Edit/Write/MultiEdit/NotebookEdit), tripping at MP_AUTOSAVE_MIN_CHARS
+# (default 100000). Read/Grep results do NOT count; work-results + work-products
+# do. (Narrowing the trigger fixes over-fire; the live checkpoint still feeds
+# the agent its full context — this is not about what the detached replay saves.)
+BIGRES=$(printf '%02000d' 0)   # 2000 chars; as a Write input {"content":...} → tojson 2014
+
+# (1) THE FIX — big raw, but pure file-READS: must NOT trigger. 2 real turns +
+# 130 Read pairs ×2000 → ~280KB raw (clears the OLD 200000 byte bar) but ~0
+# relevant. A raw-byte axis triggers here (the bug); the relevant axis must not.
+BIGREADY="$SBX/autosave-bigread.jsonl"
+: > "$BIGREADY"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$BIGREADY"
 i=1
-while [ "$i" -le 120 ]; do
-  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$TOOLY"
+while [ "$i" -le 130 ]; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"r%s","name":"Read","input":{}}]}}\n' "$i" >> "$BIGREADY"
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$BIGREADY"
   i=$((i + 1))
 done
-printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$TOOLY"   # ~250KB raw, 2 real turns
-
-OUT=$(printf '{"session_id":"sid-tooly","stop_hook_active":false,"transcript_path":"%s"}' "$TOOLY" \
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$BIGREADY"
+OUT=$(printf '{"session_id":"sid-bigread","stop_hook_active":false,"transcript_path":"%s"}' "$BIGREADY" \
   | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
 case "$OUT" in
-  *'"decision"'*'"block"'*) ok "auto-save-stop: 2-turn ~250KB session triggers via bytes axis" ;;
-  *) bad "auto-save-stop: 2-turn ~250KB session triggers via bytes axis" "no block: $OUT" ;;
+  *'"decision"'*'"block"'*) bad "auto-save-stop: big-raw file-READ session does NOT trigger (relevant axis ignores Read results)" "blocked on context volume: $OUT" ;;
+  *) ok "auto-save-stop: big-raw file-READ session does NOT trigger (relevant axis ignores Read results)" ;;
 esac
 
-# Independence pin: a byte-only trip must NOT advance the TURN baseline, or the
-# statusline countdown resets to full on every size-save in tool-heavy sessions
-# (turns climb slowly) — it would sit near-full while saves fire "out of
-# nowhere". Fresh session → turn baseline 0; after a byte trip the _last_save
-# turn field stays 0 while the byte field jumps to the transcript size. A
-# coupled impl would write "2 <bytes>" here.
-ls_turns=""; ls_bytes=""
-LSF="$HOME/.claude/hook_state/sid-tooly_last_save"
-[ -f "$LSF" ] && read ls_turns ls_bytes < "$LSF"
-{ [ "$ls_turns" = "0" ] && [ "${ls_bytes:-0}" -ge 200000 ]; } 2>/dev/null \
-  && ok "auto-save-stop: byte-trip leaves turn baseline untouched (independent baselines)" \
-  || bad "auto-save-stop: byte-trip leaves turn baseline untouched (independent baselines)" "_last_save='$ls_turns $ls_bytes'"
-
-# Mutation guard (threshold UP): same 2-turn fixture with the byte bar maxed →
-# byte axis can't fire and 2 turns is far below SAVE_INTERVAL → NO block. Flips
-# on the byte axis ALONE (a ≥10-turn fixture would block for the wrong reason).
-# Pins MP_AUTOSAVE_MIN_BYTES as a real plumbed knob, not a hardcoded constant.
-OUT=$(printf '{"session_id":"sid-tooly-hi","stop_hook_active":false,"transcript_path":"%s"}' "$TOOLY" \
-  | MP_AUTOSAVE_MIN_BYTES=999999999 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+# (2) Bash-heavy, few turns: exec RESULTS ≥ threshold → DOES trigger, even though
+# raw (~130KB) is UNDER the old 200000 bar. 60 Bash pairs ×2000 = 120000 relevant.
+BASHY="$SBX/autosave-bashy.jsonl"
+: > "$BASHY"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$BASHY"
+i=1
+while [ "$i" -le 60 ]; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"b%s","name":"Bash","input":{}}]}}\n' "$i" >> "$BASHY"
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b%s","content":"%s"}]}}\n' "$i" "$BIGRES" >> "$BASHY"
+  i=$((i + 1))
+done
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$BASHY"
+OUT=$(printf '{"session_id":"sid-bashy","stop_hook_active":false,"transcript_path":"%s"}' "$BASHY" \
+  | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
 case "$OUT" in
-  *'"decision"'*'"block"'*) bad "auto-save-stop: raised MP_AUTOSAVE_MIN_BYTES disables byte axis" "blocked: $OUT" ;;
-  *) ok "auto-save-stop: raised MP_AUTOSAVE_MIN_BYTES disables byte axis (2 turns, no turn trip)" ;;
+  *'"decision"'*'"block"'*) ok "auto-save-stop: 2-turn Bash-heavy session triggers via relevant-output axis" ;;
+  *) bad "auto-save-stop: 2-turn Bash-heavy session triggers via relevant-output axis" "no block: $OUT" ;;
 esac
 
-# Mutation guard (threshold DOWN): the tiny ~5KB HEAVY fixture (3 turns) clears
-# a 1000-byte bar → blocks. Proves the knob plumbs downward too.
+# (3) Edit-heavy, terse conv, few turns: work-PRODUCTS (edit inputs) ≥ threshold
+# → DOES trigger. THE AMNESIA-GAP GUARD: an impl that counts exec results but
+# NOT edit inputs scores this ~0 and skips it — silently losing edit-heavy
+# autonomous work. 55 Write inputs ×2014 = 110770 relevant; raw ~116KB < old bar.
+EDITY="$SBX/autosave-edity.jsonl"
+: > "$EDITY"
+printf '{"type":"user","message":{"role":"user","content":"q1"}}\n' >> "$EDITY"
+i=1
+while [ "$i" -le 55 ]; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"e%s","name":"Write","input":{"content":"%s"}}]}}\n' "$i" "$BIGRES" >> "$EDITY"
+  i=$((i + 1))
+done
+printf '{"type":"user","message":{"role":"user","content":"q2"}}\n' >> "$EDITY"
+OUT=$(printf '{"session_id":"sid-edity","stop_hook_active":false,"transcript_path":"%s"}' "$EDITY" \
+  | bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) ok "auto-save-stop: 2-turn Edit-heavy session triggers (edit inputs count as work)" ;;
+  *) bad "auto-save-stop: 2-turn Edit-heavy session triggers (edit inputs count as work)" "no block: $OUT" ;;
+esac
+
+# (4) Independence pin: a relevant-axis trip must NOT advance the TURN baseline,
+# or the statusline countdown resets to full on every size-save (turns climb
+# slowly). Fresh session → turn baseline 0; after the BASHY trip the _last_save
+# turn field stays 0 while the relevant field jumps to ≥100000. A coupled impl
+# writes "2 <relevant>".
+ls_turns=""; ls_rel=""
+LSF="$HOME/.claude/hook_state/sid-bashy_last_save"
+[ -f "$LSF" ] && read ls_turns ls_rel < "$LSF"
+{ [ "$ls_turns" = "0" ] && [ "${ls_rel:-0}" -ge 100000 ]; } 2>/dev/null \
+  && ok "auto-save-stop: relevant-trip leaves turn baseline untouched (independent baselines)" \
+  || bad "auto-save-stop: relevant-trip leaves turn baseline untouched (independent baselines)" "_last_save='$ls_turns $ls_rel'"
+
+# (5) Mutation guard (threshold UP): BASHY with the relevant bar maxed → axis
+# can't fire and 2 turns is far below SAVE_INTERVAL → NO block. Pins
+# MP_AUTOSAVE_MIN_CHARS as a real plumbed knob, not a hardcoded constant.
+OUT=$(printf '{"session_id":"sid-bashy-hi","stop_hook_active":false,"transcript_path":"%s"}' "$BASHY" \
+  | MP_AUTOSAVE_MIN_CHARS=999999999 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) bad "auto-save-stop: raised MP_AUTOSAVE_MIN_CHARS disables relevant axis" "blocked: $OUT" ;;
+  *) ok "auto-save-stop: raised MP_AUTOSAVE_MIN_CHARS disables relevant axis (2 turns, no turn trip)" ;;
+esac
+
+# (6) Mutation guard (threshold DOWN): the tiny HEAVY fixture (3 turns, conv
+# "q1q2q3"=6 chars) clears a 1-char bar → blocks. Proves the knob plumbs down.
 OUT=$(printf '{"session_id":"sid-heavy-lo","stop_hook_active":false,"transcript_path":"%s"}' "$HEAVY" \
-  | MP_AUTOSAVE_MIN_BYTES=1000 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+  | MP_AUTOSAVE_MIN_CHARS=1 bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
 case "$OUT" in
-  *'"decision"'*'"block"'*) ok "auto-save-stop: lowered MP_AUTOSAVE_MIN_BYTES rescues a small session" ;;
-  *) bad "auto-save-stop: lowered MP_AUTOSAVE_MIN_BYTES rescues a small session" "no block: $OUT" ;;
+  *'"decision"'*'"block"'*) ok "auto-save-stop: lowered MP_AUTOSAVE_MIN_CHARS rescues a small session" ;;
+  *) bad "auto-save-stop: lowered MP_AUTOSAVE_MIN_CHARS rescues a small session" "no block: $OUT" ;;
 esac
 
 echo "----"

@@ -2,9 +2,10 @@
 # AUTO-SAVE STOP HOOK — Save to internal memory every N exchanges
 #
 # Claude Code "Stop" hook. After every assistant response:
-# 1. Counts REAL human turns AND transcript bytes since the last save
-# 2. Every SAVE_INTERVAL turns OR MP_AUTOSAVE_MIN_BYTES bytes, BLOCKS the AI
-#    from stopping (the byte axis checkpoints tool-heavy, few-turn sessions)
+# 1. Counts REAL human turns AND relevant-output chars since the last save
+# 2. Every SAVE_INTERVAL turns OR MP_AUTOSAVE_MIN_CHARS relevant-output chars,
+#    BLOCKS the AI from stopping (the size axis checkpoints tool-heavy,
+#    few-turn sessions — relevant output = conv + exec results + edit inputs)
 # 3. Returns a reason telling the AI to save to its internal memory system
 # 4. AI saves, tries to stop again — stop_hook_active=true lets it through
 #
@@ -12,11 +13,15 @@
 
 SAVE_INTERVAL=10
 # Tool-heavy sessions accumulate few REAL turns (a measured 2026-06-13 session
-# held only 2 across 2MB of transcript) but lots of bytes, so a turn-only gate
-# never checkpoints them → silent amnesia. ALSO trip when the transcript grows
-# this many bytes since the last size-save. Env-tunable; same magnitude as
-# session-end's MP_REPLAY_MIN_BYTES floor. Set very high to disable the axis.
-MP_AUTOSAVE_MIN_BYTES="${MP_AUTOSAVE_MIN_BYTES:-200000}"
+# held only 2 across 2MB of transcript) but lots of work, so a turn-only gate
+# never checkpoints them → silent amnesia. ALSO trip when RELEVANT OUTPUT grows
+# this many chars since the last size-save. Relevant output = conversation +
+# exec results (Bash/remote_run/remote_script) + edit inputs (Edit/Write/
+# MultiEdit/NotebookEdit) — see _mp_relevant_output_chars in _lib.sh. Raw bytes
+# were the old axis but OVER-fired on context-heavy sessions: file-reads +
+# attachments dominate the transcript yet are context, not work (a 2.6MB session
+# fired on prompt 1 at only ~180k relevant). Env-tunable; high disables the axis.
+MP_AUTOSAVE_MIN_CHARS="${MP_AUTOSAVE_MIN_CHARS:-100000}"
 STATE_DIR="$HOME/.claude/hook_state"
 mkdir -p "$STATE_DIR"
 
@@ -69,41 +74,41 @@ fi
 EXCHANGE_COUNT=$(_mp_real_user_turns "$TRANSCRIPT_PATH")
 
 # Track last save point for this session. The state file holds two INDEPENDENT
-# baselines: "<turns_at_last_turn_save> <bytes_at_last_byte_save>". Independent
-# so a size-save never resets the turn countdown and vice versa — coupling them
-# would peg the statusline countdown near-full in tool-heavy sessions while
-# saves kept firing on the byte axis. Backward-compatible: a legacy one-field
-# file (bare turn count) reads the bytes baseline as 0, which just lets the
-# first post-upgrade Stop checkpoint an already-large in-progress session.
+# baselines: "<turns_at_last_turn_save> <relevant_at_last_size_save>".
+# Independent so a size-save never resets the turn countdown and vice versa —
+# coupling them would peg the statusline countdown near-full in tool-heavy
+# sessions while saves kept firing on the size axis. Backward-compatible: a
+# legacy file's second field (old raw-byte baseline, or absent → 0) is read as
+# the relevant baseline; a stale large value just makes RELEVANT_SINCE negative,
+# so the size axis stays dormant until the next turn-save re-baselines it — no
+# spurious fire, no crash.
 LAST_SAVE_FILE="$STATE_DIR/${SESSION_ID}_last_save"
 LAST_SAVE=0
-LAST_SAVE_BYTES=0
+LAST_SAVE_RELEVANT=0
 if [ -f "$LAST_SAVE_FILE" ]; then
-    read LAST_SAVE LAST_SAVE_BYTES < "$LAST_SAVE_FILE"
+    read LAST_SAVE LAST_SAVE_RELEVANT < "$LAST_SAVE_FILE"
 fi
 # Both baselines must be pure integers before arithmetic — a torn or legacy
 # file must not break the count.
-case "$LAST_SAVE"       in ''|*[!0-9]*) LAST_SAVE=0 ;; esac
-case "$LAST_SAVE_BYTES" in ''|*[!0-9]*) LAST_SAVE_BYTES=0 ;; esac
+case "$LAST_SAVE"          in ''|*[!0-9]*) LAST_SAVE=0 ;; esac
+case "$LAST_SAVE_RELEVANT" in ''|*[!0-9]*) LAST_SAVE_RELEVANT=0 ;; esac
 
-# Current transcript size = the byte axis. Guarded: missing/unreadable → 0,
-# and EXCHANGE_COUNT is also 0 on those same sessions, so the axis stays dormant.
-TRANSCRIPT_BYTES=0
-if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-    TRANSCRIPT_BYTES=$(wc -c < "$TRANSCRIPT_PATH" 2>/dev/null | tr -d ' ')
-fi
-case "$TRANSCRIPT_BYTES" in ''|*[!0-9]*) TRANSCRIPT_BYTES=0 ;; esac
+# Current relevant-output size = the size axis (conv + exec results + edit
+# inputs; _mp_relevant_output_chars). Guarded: missing/unreadable → 0, and
+# EXCHANGE_COUNT is also 0 on those same sessions, so the axis stays dormant.
+RELEVANT_OUTPUT=$(_mp_relevant_output_chars "$TRANSCRIPT_PATH")
+case "$RELEVANT_OUTPUT" in ''|*[!0-9]*) RELEVANT_OUTPUT=0 ;; esac
 
 SINCE_LAST=$((EXCHANGE_COUNT - LAST_SAVE))
-BYTES_SINCE=$((TRANSCRIPT_BYTES - LAST_SAVE_BYTES))
+RELEVANT_SINCE=$((RELEVANT_OUTPUT - LAST_SAVE_RELEVANT))
 
-echo "[$(date '+%H:%M:%S')] Session $SESSION_ID: $EXCHANGE_COUNT exchanges, $SINCE_LAST since save, ${BYTES_SINCE}B since byte-save" >> "$STATE_DIR/hook.log"
+echo "[$(date '+%H:%M:%S')] Session $SESSION_ID: $EXCHANGE_COUNT exchanges, $SINCE_LAST since save, ${RELEVANT_SINCE} relevant-chars since size-save" >> "$STATE_DIR/hook.log"
 
 # Cache the turn-countdown state for the statusline's line-1 indicator:
 # "<since_last> <interval>". Costs nothing extra — EXCHANGE_COUNT was already
 # computed above; the statusline reads this with a plain shell `read` instead
 # of re-parsing the transcript (which would blow its ≤3-jq-fork budget). The
-# countdown tracks the TURN axis only — the size axis (MP_AUTOSAVE_MIN_BYTES)
+# countdown tracks the TURN axis only — the size axis (MP_AUTOSAVE_MIN_CHARS)
 # can fire a save independently WITHOUT resetting it, so the count is "turns
 # until the turn-based save": an upper bound on the next save, not a guarantee
 # none fires sooner. Independent baselines (trigger branch below) keep this
@@ -117,17 +122,17 @@ if [ "$EXCHANGE_COUNT" -gt 0 ] 2>/dev/null; then
 fi
 
 # Time to save? Either axis fires: SAVE_INTERVAL real turns, OR a large chunk of
-# new transcript (tool-heavy work that never accumulates turns). EXCHANGE_COUNT>0
-# guard keeps headless / 0-turn runs from ever blocking.
-if { [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] || [ "$BYTES_SINCE" -ge "$MP_AUTOSAVE_MIN_BYTES" ]; } && [ "$EXCHANGE_COUNT" -gt 0 ]; then
+# new RELEVANT OUTPUT (tool-heavy work that never accumulates turns).
+# EXCHANGE_COUNT>0 guard keeps headless / 0-turn runs from ever blocking.
+if { [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] || [ "$RELEVANT_SINCE" -ge "$MP_AUTOSAVE_MIN_CHARS" ]; } && [ "$EXCHANGE_COUNT" -gt 0 ]; then
     # Advance ONLY the axis/axes that fired — independent baselines so a
     # size-save never resets the turn countdown (and vice versa).
     NEW_SAVE="$LAST_SAVE"
-    NEW_SAVE_BYTES="$LAST_SAVE_BYTES"
-    [ "$SINCE_LAST"  -ge "$SAVE_INTERVAL" ]         && NEW_SAVE="$EXCHANGE_COUNT"
-    [ "$BYTES_SINCE" -ge "$MP_AUTOSAVE_MIN_BYTES" ] && NEW_SAVE_BYTES="$TRANSCRIPT_BYTES"
-    printf '%s %s\n' "$NEW_SAVE" "$NEW_SAVE_BYTES" > "$LAST_SAVE_FILE"
-    echo "[$(date '+%H:%M:%S')] TRIGGERING SAVE at exchange $EXCHANGE_COUNT (${TRANSCRIPT_BYTES}B)" >> "$STATE_DIR/hook.log"
+    NEW_SAVE_RELEVANT="$LAST_SAVE_RELEVANT"
+    [ "$SINCE_LAST"     -ge "$SAVE_INTERVAL" ]         && NEW_SAVE="$EXCHANGE_COUNT"
+    [ "$RELEVANT_SINCE" -ge "$MP_AUTOSAVE_MIN_CHARS" ] && NEW_SAVE_RELEVANT="$RELEVANT_OUTPUT"
+    printf '%s %s\n' "$NEW_SAVE" "$NEW_SAVE_RELEVANT" > "$LAST_SAVE_FILE"
+    echo "[$(date '+%H:%M:%S')] TRIGGERING SAVE at exchange $EXCHANGE_COUNT (${RELEVANT_OUTPUT} relevant-chars)" >> "$STATE_DIR/hook.log"
 
     SCHEMA_REF="${MEMORY_PACK_HOME:-$HOME/.memory-pack}/SCHEMA.md"
     cat << HOOKJSON
