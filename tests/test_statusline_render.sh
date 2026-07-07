@@ -111,6 +111,20 @@ if [ -f "$ICONS" ]; then
   [ "$mem_cp" = "F09D1" ] \
     && ok "ICON_MEMORY (Nerd) is md-brain U+F09D1" \
     || bad "ICON_MEMORY (Nerd) is md-brain U+F09D1 (F0004=md-account silhouette)" "got U+$mem_cp"
+
+  # ICON_DIRTY must be the modified-dot ● (U+25CF) in BOTH tables, NOT the
+  # Powerline line-number glyph (U+E0A1) which renders as a literal "LN" —
+  # the wrong symbol for a dirty working tree. Codepoint assertion (the old
+  # Nerd value was PUA; ● is plain BMP and renders in any font, so both
+  # tables can share it).
+  for _m in 1 0; do
+    dc=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT="$3" . "$4" && printf "%s" "$ICON_DIRTY"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$_m" "$ICONS" \
+      | python3 -c 'import sys; s=sys.stdin.read(); print(("%X"%ord(s[0])) if s else "EMPTY")')
+    [ "$dc" = "25CF" ] \
+      && ok "ICON_DIRTY (NERDFONT=$_m) is dot U+25CF" \
+      || bad "ICON_DIRTY (NERDFONT=$_m) is dot U+25CF (E0A1=pl-line_number 'LN')" "got U+$dc"
+  done
 fi
 
 # ─── mp_pill_fg luminance flip ────────────────────────────────────────────

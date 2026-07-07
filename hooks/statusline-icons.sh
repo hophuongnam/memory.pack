@@ -12,7 +12,7 @@
 # Glyph reference (so edits don't have to guess what the bytes mean):
 #                       Nerd Font                          Unicode fallback
 #   ICON_BRANCH        U+E0A0  nf-pl-branch              U+2387  HELM SYMBOL (⎇)
-#   ICON_DIRTY         U+E0A1  nf-pl-branch_detached     U+002A  asterisk (*)
+#   ICON_DIRTY         U+25CF  BLACK CIRCLE (●)          U+25CF  BLACK CIRCLE (●)
 #   ICON_PWD           U+F115  nf-fa-folder_open         ""      (omit in fallback)
 #   ICON_MEMORY        U+F09D1 nf-md-brain               U+1F9E0 brain (🧠)
 #   ICON_BOOT_OK       U+F00C  nf-fa-check               U+2713  check (✓)
@@ -27,7 +27,7 @@
 
 if _mp_have_nerdfont 2>/dev/null; then
   ICON_BRANCH=""
-  ICON_DIRTY=""
+  ICON_DIRTY="●"
   ICON_PWD=""
   ICON_MEMORY="󰧑"
   ICON_BOOT_OK=""
@@ -41,7 +41,7 @@ if _mp_have_nerdfont 2>/dev/null; then
   ICON_TURNS="󰑐"
 else
   ICON_BRANCH="⎇"
-  ICON_DIRTY="*"
+  ICON_DIRTY="●"
   ICON_PWD=""
   ICON_MEMORY="🧠"
   ICON_BOOT_OK="✓"
