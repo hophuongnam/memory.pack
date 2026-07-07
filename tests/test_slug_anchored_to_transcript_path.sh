@@ -203,7 +203,7 @@ SL_STDIN="$(printf '{"session_id":"%s","transcript_path":"%s","workspace":{"proj
 SL_OUT="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 
 case "$SL_OUT" in
-  *"⏭skip-replay"*) ok "statusline ⏭skip-replay parity (transcript anchors hash to PARENT)" ;;
+  *"⏭ skip-replay"*) ok "statusline ⏭skip-replay parity (transcript anchors hash to PARENT)" ;;
   *) bad "statusline ⏭skip-replay parity (transcript anchors hash to PARENT)" \
          "sentinel at PARENT hash not picked up — invariant #2 violated | out=[$SL_OUT]" ;;
 esac
@@ -219,7 +219,7 @@ esac
 rm -f "$SL_PREFIX/hooks/.skip-replay-${PARENT_HASH}"
 SL_OUT3="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 case "$SL_OUT3" in
-  *"⏭skip-replay"*)
+  *"⏭ skip-replay"*)
     bad "statusline does NOT honor a SUB-hash-only sentinel (parity check)" \
         "indicator fired off a hash that hooks never write | out=[$SL_OUT3]" ;;
   *) ok "statusline does NOT honor a SUB-hash-only sentinel (parity check)" ;;

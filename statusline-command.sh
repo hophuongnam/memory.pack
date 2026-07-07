@@ -290,7 +290,7 @@ format_pct() {
 
 # --- Line 1 ---
 vibe_part=""
-[ -n "$vibe" ] && vibe_part=" $(ansi_fg "$THEME_FG_VIBE")${ICON_VIBE}${vibe}${RESET}"
+[ -n "$vibe" ] && vibe_part=" $(ansi_fg "$THEME_FG_VIBE")${ICON_VIBE} ${vibe}${RESET}"
 
 git_part=""
 if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
@@ -347,18 +347,18 @@ fi
 boot_status_themed=""
 if [ -n "$session_id" ] && [ -f "$marker_file" ]; then
   case "$(cat "$marker_file" 2>/dev/null)" in
-    loaded)  boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_OK")${ICON_BOOT_OK}booted${RESET}" ;;
-    pending) boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_PENDING")${ICON_BOOT_PENDING}pending${RESET}" ;;
+    loaded)  boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_OK")${ICON_BOOT_OK} booted${RESET}" ;;
+    pending) boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_PENDING")${ICON_BOOT_PENDING} pending${RESET}" ;;
   esac
 fi
 case "$boot_content" in
   "[Replay failed for prior session"*)
-    boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_ERR")${ICON_BOOT_ERR}replay-err${RESET}" ;;
+    boot_status_themed="$(ansi_fg "$THEME_FG_BOOT_ERR")${ICON_BOOT_ERR} replay-err${RESET}" ;;
 esac
 
 skip_themed=""
 if [ -n "$proj_hash" ] && [ -f "$HOOKS_DIR/.skip-replay-${proj_hash}" ]; then
-  skip_themed="$(ansi_fg "$THEME_FG_SKIP_REPLAY")${ICON_SKIP_REPLAY}skip-replay${RESET}"
+  skip_themed="$(ansi_fg "$THEME_FG_SKIP_REPLAY")${ICON_SKIP_REPLAY} skip-replay${RESET}"
 fi
 
 # Turns-until-autosave countdown. auto-save-stop.sh caches "<since> <interval>"

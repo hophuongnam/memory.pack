@@ -793,5 +793,57 @@ if [ -f "$RENDER" ]; then
     || bad "sparkline mid-bar color == mp_gradient_color 0.5 (value parity)" "mid=$mid"
 fi
 
+# ─── icon↔label separator space (the "⏳pending"→"⏳ending" overlap fix) ─────
+# Wide glyphs — Nerd PUA (clock/warning/fast-forward/bolt) AND the Unicode
+# fallback emoji (⏳ ⏭ ⚠ ⚡) — paint two cells but many terminals advance the
+# cursor only one, so a label jammed against the glyph gets its first letter
+# drawn ON the glyph's right half (the reported "pending" overlap; the vibe
+# ⚡SPP has the same defect). Every OTHER indicator (mem/ctx/5h/7d/turns/pwd)
+# already puts a space between icon and label — the A/B proof the space is the
+# fix: ICON_MEMORY is *also* a wide glyph in the same render and never overlaps.
+# The five boot/skip/vibe sites did not. Fix = one space at each site.
+#
+# Primary guard is STRUCTURAL and table-agnostic: the render string is
+# identical whichever icon table filled the ICON_* var, so this pins the fix
+# without depending on the terminal's Nerd/Unicode selection.
+if [ -f "$SL" ]; then
+  assert_spaced() {  # $1 = jammed form (must be ABSENT)  $2 = spaced (PRESENT)
+    grep -qF "$1" "$SL" \
+      && bad "icon-label separator present" "jammed '$1' still in statusline-command.sh" \
+      || ok "icon-label separator: no jammed '$1'"
+    grep -qF "$2" "$SL" \
+      && ok "icon-label separator: spaced '$2' present" \
+      || bad "icon-label separator missing" "expected '$2' in statusline-command.sh"
+  }
+  assert_spaced '${ICON_VIBE}${vibe}'             '${ICON_VIBE} ${vibe}'
+  assert_spaced '${ICON_BOOT_OK}booted'           '${ICON_BOOT_OK} booted'
+  assert_spaced '${ICON_BOOT_PENDING}pending'     '${ICON_BOOT_PENDING} pending'
+  assert_spaced '${ICON_BOOT_ERR}replay-err'      '${ICON_BOOT_ERR} replay-err'
+  assert_spaced '${ICON_SKIP_REPLAY}skip-replay'  '${ICON_SKIP_REPLAY} skip-replay'
+fi
+
+# Behavioral: prove the space reaches the RENDERED byte stream in the user's
+# actual table. The screenshot glyph is the Nerd clock (U+F017), not the
+# Unicode hourglass — so drive NERDFONT=1 and resolve the glyph the unit-path
+# way (no PUA literal in this test source; it doesn't survive md roundtrips).
+if [ -f "$SL" ]; then
+  NERD_PENDING=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "$ICON_BOOT_PENDING"' \
+    _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
+  bmark="$HERE/../hooks/.boot-marker-test-session-full"
+  printf 'pending' > "$bmark"
+  bl=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=1 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  rm -f "$bmark"
+  if [ -n "$NERD_PENDING" ] && printf '%s' "$bl" | grep -qF "$NERD_PENDING pending"; then
+    ok "NERDFONT=1: pending renders glyph + space + label (no overlap)"
+  else
+    bad "NERDFONT=1: pending renders glyph + space + label" "render: $bl"
+  fi
+  if printf '%s' "$bl" | grep -qF "${NERD_PENDING}pending"; then
+    bad "NERDFONT=1: no glyph-jammed-against-label in render" "found jammed 'pending'"
+  else
+    ok "NERDFONT=1: no glyph-jammed-against-label in render"
+  fi
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

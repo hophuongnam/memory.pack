@@ -93,13 +93,13 @@ STDIN_JSON="$(printf '{"session_id":"%s","workspace":{"project_dir":"%s"},"model
 OUT="$(printf '%s' "$STDIN_JSON" | MEMORY_PACK_NERDFONT=0 "$LINK" 2>/dev/null)"
 
 case "$OUT" in
-  *"✓booted"*) ok "✓booted renders from relocated hooks/ (via symlink)" ;;
-  *) bad "✓booted renders from relocated hooks/ (via symlink)" \
+  *"✓ booted"*) ok "✓ booted renders from relocated hooks/ (via symlink)" ;;
+  *) bad "✓ booted renders from relocated hooks/ (via symlink)" \
          "marker not found at resolved path | out=[$OUT]" ;;
 esac
 case "$OUT" in
-  *"⏭skip-replay"*) ok "⏭skip-replay renders from relocated hooks/ (via symlink)" ;;
-  *) bad "⏭skip-replay renders from relocated hooks/ (via symlink)" \
+  *"⏭ skip-replay"*) ok "⏭ skip-replay renders from relocated hooks/ (via symlink)" ;;
+  *) bad "⏭ skip-replay renders from relocated hooks/ (via symlink)" \
          "sentinel not found at resolved path | out=[$OUT]" ;;
 esac
 
@@ -107,8 +107,8 @@ esac
 printf 'pending' > "$PREFIX/hooks/.boot-marker-${SID}"
 OUT2="$(printf '%s' "$STDIN_JSON" | MEMORY_PACK_NERDFONT=0 "$LINK" 2>/dev/null)"
 case "$OUT2" in
-  *"⏳pending"*) ok "⏳pending distinguished from ✓booted (contents honored)" ;;
-  *) bad "⏳pending distinguished from ✓booted (contents honored)" \
+  *"⏳ pending"*) ok "⏳ pending distinguished from ✓ booted (contents honored)" ;;
+  *) bad "⏳ pending distinguished from ✓ booted (contents honored)" \
          "out=[$OUT2]" ;;
 esac
 
