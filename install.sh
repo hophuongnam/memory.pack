@@ -8,8 +8,8 @@
 # What it does (all idempotent):
 #   1. preflight deps (bash git python3 jq sqlite3 node)
 #   2. copy the engine to $PREFIX (no .git, no runtime state, no search.db)
-#   3. merge the 12 hook registrations into ~/.claude/settings.json and set
-#      env.MEMORY_PACK_HOME=$PREFIX  (foreign hooks/keys untouched; backup)
+#   3. merge the manifest's hook registrations into ~/.claude/settings.json
+#      and set env.MEMORY_PACK_HOME=$PREFIX (foreign hooks/keys untouched)
 #   4. append a SCHEMA.md pointer to ~/.claude/CLAUDE.md (once)
 #   5. preflight the claude-agent-sdk (replay); --with-sdk installs it
 #      engine-local
@@ -20,7 +20,7 @@
 # sources; it only places files and wires settings.json.
 set -euo pipefail
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEFAULT_PREFIX="${MEMORY_PACK_HOME:-$HOME/.memory-pack}"
 PREFIX="$DEFAULT_PREFIX"
 ASSUME_YES=false UNINSTALL=false PURGE=false CHECK_ONLY=false WITH_SDK=false
@@ -70,9 +70,16 @@ mkdir -p "$CLAUDE_DIR"
 # ---- uninstall --------------------------------------------------------
 if $UNINSTALL; then
   if [ -f "$SETTINGS" ]; then
-    [ -f "$PREFIX/install/merge-settings.sh" ] || die "engine not found at $PREFIX (need merge-settings.sh)"
+    # Prefer the installed copy; fall back to the checkout's own so a purged
+    # PREFIX (`rm -rf ~/.memory-pack` first) still unwires settings.json
+    # instead of dying with 13 dangling hook registrations.
+    MS="$PREFIX/install/merge-settings.sh"; MF="$MANIFEST"
+    if [ ! -f "$MS" ]; then
+      MS="$SELF_DIR/install/merge-settings.sh"; MF="$SELF_DIR/install/hooks.manifest.json"
+    fi
+    [ -f "$MS" ] || die "merge-settings.sh not found at $PREFIX or $SELF_DIR"
     tmp="$(mktemp)"
-    "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" --statusline "$SL_LINK" --uninstall < "$SETTINGS" > "$tmp"
+    "$MS" --prefix "$PREFIX" --manifest "$MF" --statusline "$SL_LINK" --uninstall < "$SETTINGS" > "$tmp"
     jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "uninstall produced invalid JSON — settings.json untouched"; }
     mv "$tmp" "$SETTINGS"
     say "removed Memory.Pack hooks + env.MEMORY_PACK_HOME + .statusLine from $SETTINGS"
@@ -98,29 +105,49 @@ if $UNINSTALL; then
 fi
 
 # ---- 2. place engine --------------------------------------------------
-[ "$SELF_DIR" != "$PREFIX" ] || die "refuse to install onto the source checkout itself"
+# The in-place guard compares CANONICAL paths but only for the comparison:
+# the raw string compare let a trailing slash, relative path, or symlinked
+# prefix through, and rsync src==dest with a delete pass then removed .git
+# from the SOURCE checkout. PREFIX itself stays exactly as the user gave it
+# (wiring must be byte-stable across install/re-install/uninstall — on
+# macOS /var is a symlink to /private/var, so rewriting PREFIX to its real
+# path would flip every settings.json entry between runs). A nonexistent
+# PREFIX can't be the (existing) checkout, so raw is fine then.
+PREFIX_REAL="$PREFIX"
+if [ -d "$PREFIX" ]; then PREFIX_REAL="$(cd "$PREFIX" && pwd -P)"; fi
+[ "$SELF_DIR" != "$PREFIX_REAL" ] || die "refuse to install onto the source checkout itself"
 say "installing engine -> $PREFIX"
 mkdir -p "$PREFIX"
-EXCL=(
-  --exclude '.git' --exclude '.worktrees' --exclude '.DS_Store'
-  --exclude '__pycache__' --exclude '*.pyc'
-  --exclude 'index/search.db' --exclude 'index/search.db-*'
-  --exclude '.boot-context-*' --exclude '.boot-marker-*'
-  --exclude '.replay-*' --exclude '.skip-replay-*'
-  --exclude '.statusline-clock-*'
-  --exclude 'statusline-token-rate.log'
+# One exclusion list drives BOTH rsync and the tar fallback (hand-duplicated
+# lists are the drift surface invariant #5 warns about). Semantics: these
+# names are excluded from the TRANSFER and — because rsync deletes with
+# plain --delete, NOT --delete-excluded — PROTECTED from deletion at the
+# destination. --delete-excluded deleted every excluded name AT $PREFIX on
+# re-install: all projects' live .boot-context-*/.skip-replay-* (silent
+# amnesia on every upgrade of a GNU-rsync host) and, via implied --delete,
+# the dest-only node_modules/ from --with-sdk. Stale engine files are still
+# cleaned (--delete covers non-excluded names). node_modules/package*.json
+# and the machine-local personal files (.mcp.json, .claude, .superpowers,
+# vibeCodingMethod) never exist in a clean checkout but are listed so a
+# dev-machine install neither ships them nor deletes them at PREFIX.
+EXCL_NAMES=(
+  '.git' '.worktrees' '.DS_Store'
+  '__pycache__' '*.pyc'
+  'index/search.db' 'index/search.db-*'
+  '.boot-context-*' '.boot-marker-*'
+  '.replay-*' '.skip-replay-*'
+  '.statusline-clock-*'
+  'statusline-token-rate.log'
+  'node_modules' 'package.json' 'package-lock.json'
+  '.mcp.json' '.claude' '.superpowers' 'vibeCodingMethod'
 )
+EXCL=(); TAR_EXCL=()
+for n in "${EXCL_NAMES[@]}"; do EXCL+=(--exclude "$n"); TAR_EXCL+=("--exclude=$n"); done
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete-excluded "${EXCL[@]}" "$SELF_DIR"/ "$PREFIX"/
+  rsync -a --delete "${EXCL[@]}" "$SELF_DIR"/ "$PREFIX"/
 else
-  # tar-pipe fallback (rsync absent on minimal hosts)
-  ( cd "$SELF_DIR" && tar --exclude='.git' --exclude='.worktrees' \
-      --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
-      --exclude='index/search.db' --exclude='index/search.db-*' \
-      --exclude='.boot-context-*' --exclude='.boot-marker-*' \
-      --exclude='.replay-*' --exclude='.skip-replay-*' \
-      --exclude='.statusline-clock-*' \
-      --exclude='statusline-token-rate.log' -cf - . ) \
+  # tar-pipe fallback (rsync absent on minimal hosts; no stale-file cleanup)
+  ( cd "$SELF_DIR" && tar "${TAR_EXCL[@]}" -cf - . ) \
     | ( cd "$PREFIX" && tar -xf - )
 fi
 chmod +x "$PREFIX"/hooks/*.sh "$PREFIX"/hooks/*.mjs "$PREFIX"/index/*.py \
@@ -166,7 +193,9 @@ if [ -d "$PREFIX/skills" ]; then
 fi
 
 # ---- 3. merge settings.json ------------------------------------------
-[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+# -s not -f: a 0-byte settings.json (crash-truncated) must be healed like
+# an absent one, or jq emits nothing and the merge dies half-wired.
+[ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 [ -f "$SETTINGS.mp-bak" ] || cp "$SETTINGS" "$SETTINGS.mp-bak"   # one-time pristine backup
 tmp="$(mktemp)"
 "$PREFIX/install/merge-settings.sh" --prefix "$PREFIX" --manifest "$MANIFEST" "${SL_MERGE[@]+"${SL_MERGE[@]}"}" < "$SETTINGS" > "$tmp"
@@ -190,7 +219,9 @@ sdk_ok=false
 if [ -n "$SDK_SPEC" ] && [ "${SDK_SPEC#/}" != "$SDK_SPEC" ] && [ -f "$SDK_SPEC" ]; then
   sdk_ok=true
 elif MEMORY_PACK_HOME="$PREFIX" node --input-type=module \
-     -e 'await import(process.env.S)' S="@anthropic-ai/claude-agent-sdk/sdk.mjs" >/dev/null 2>&1; then
+     -e 'await import("@anthropic-ai/claude-agent-sdk/sdk.mjs")' >/dev/null 2>&1; then
+  # literal specifier: a trailing S=… was argv (not env), so the probe
+  # imported undefined and this branch could never succeed
   sdk_ok=true
 fi
 if ! $sdk_ok && $WITH_SDK && command -v npm >/dev/null 2>&1; then

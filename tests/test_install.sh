@@ -40,13 +40,22 @@ SL_LINK="$FH/.claude/statusline-command.sh"
 # --- preflight-only mode ---
 run --check >/dev/null 2>&1 && ok "preflight (--check) passes with full deps" \
   || bad "preflight passes with full deps"
-if env -i PATH=/nonexistent HOME="$FH" bash "$INSTALL" --check >/dev/null 2>&1; then
-  bad "preflight fails loud when deps missing" "exited 0 with empty PATH"
-else
+# preflight must fail LOUD when a dep is missing. A stub PATH holding ONLY
+# bash+dirname lets install.sh itself run while git/jq/... are absent — the
+# old `env -i PATH=/nonexistent` form died at env's bash lookup (exit 127
+# before install.sh ever ran), so it passed whatever preflight() did.
+STUBBIN="$SBX/stubbin"; mkdir -p "$STUBBIN"
+ln -s "$(command -v bash)" "$STUBBIN/bash"
+ln -s "$(command -v dirname)" "$STUBBIN/dirname"
+PF_OUT=$(env -i PATH="$STUBBIN" HOME="$FH" bash "$INSTALL" --check 2>&1); PF_RC=$?
+if [ "$PF_RC" -ne 0 ] && printf '%s' "$PF_OUT" | grep -q 'missing required dependencies'; then
   ok "preflight fails loud when deps missing"
+else
+  bad "preflight fails loud when deps missing" "rc=$PF_RC out=$(printf '%s' "$PF_OUT" | head -1)"
 fi
 
 # --- install ---
+touch "$SBX/pre-install-ts"; sleep 1   # freshness anchor for the search.db assert
 if run --prefix "$PREFIX" --yes >"$SBX/log" 2>&1; then ok "install exits 0"
 else bad "install exits 0" "$(tail -3 "$SBX/log")"; fi
 
@@ -63,11 +72,21 @@ done
 [ -z "$missing" ] && ok "all manifest hook scripts present + executable at prefix" \
   || bad "all manifest hook scripts present + executable at prefix" "missing/non-exec:$missing"
 [ ! -e "$PREFIX/.git" ] && ok "no .git shipped" || bad "no .git shipped"
-[ ! -e "$PREFIX/index/search.db" ] || \
-  { [ -f "$PREFIX/index/search.db" ] && [ ! -s "$PREFIX/index/search.db.SHIPPED" ]; }
-if find "$PREFIX" -name 'search.db' -path '*/index/*' -newer "$SRC/install.sh" >/dev/null 2>&1 \
-   && [ -f "$PREFIX/index/search.db" ]; then ok "search.db is freshly built, not shipped"; else
-   [ -f "$PREFIX/index/search.db" ] && ok "search.db is freshly built, not shipped" || bad "search.db built"; fi
+# search.db must be BUILT during install (step 6), never shipped from the
+# checkout: strictly newer than the pre-install timestamp. (The old form
+# `find … >/dev/null` ok'd on mere existence in BOTH branches — a shipped
+# stale db passed as "freshly built".)
+if [ -n "$(find "$PREFIX/index/search.db" -newer "$SBX/pre-install-ts" 2>/dev/null)" ]; then
+  ok "search.db is freshly built, not shipped"
+else
+  bad "search.db is freshly built, not shipped" "missing or older than pre-install timestamp"
+fi
+# SDK bare-import probe must use a literal specifier: `node -e '…' S=value`
+# puts S= in argv, not env, so process.env.S was undefined and the probe
+# branch could never succeed (false "SDK NOT found" warnings).
+grep -q 'await import("@anthropic-ai/claude-agent-sdk/sdk.mjs")' "$INSTALL" \
+  && ok "SDK bare-import probe uses a literal specifier" \
+  || bad "SDK bare-import probe uses a literal specifier" "dead post-command env assignment still present"
 
 # settings merged: 13 MP entries w/ prefix, foreign survives, env set
 mp=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
@@ -104,8 +123,32 @@ grep -q "$PREFIX/SCHEMA.md" "$FH/.claude/CLAUDE.md" && grep -q 'existing user co
   MEMORY_PACK_HOME="$PREFIX" python3 "$PREFIX/index/search-memories.py" demo --json 2>/dev/null | jq -e 'length>=1' >/dev/null \
   && ok "index bootstrapped and queryable" || bad "index bootstrapped and queryable"
 
-# --- idempotent ---
+# --- idempotent + upgrade preserves live state at PREFIX ---
+# Between-session runtime state (boot contexts, sentinels) and the
+# engine-local SDK live at PREFIX on installed hosts. A re-install/upgrade
+# must not destroy them: `rsync --delete-excluded` deleted every excluded
+# name AT THE DESTINATION (all projects' pending boot contexts +
+# carry-forwards + skip sentinels) and, via implied --delete, the
+# dest-only node_modules/ — silent amnesia + replay death on every
+# `git pull && ./install.sh`. Stale ENGINE files must still be cleaned.
+printf 'TITLE: t\n' > "$PREFIX/hooks/.boot-context-cafe1234"
+printf 'TITLE: t\n' > "$PREFIX/hooks/.boot-context-last-cafe1234"
+: > "$PREFIX/hooks/.skip-replay-cafe1234"
+mkdir -p "$PREFIX/node_modules/@anthropic-ai/claude-agent-sdk"
+printf 'export {}\n' > "$PREFIX/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+printf '{}\n' > "$PREFIX/package.json"
+: > "$PREFIX/hooks/zz-stale-engine-file.sh"   # not in source → upgrade must clean it
 run --prefix "$PREFIX" --yes >/dev/null 2>&1
+{ [ -f "$PREFIX/hooks/.boot-context-cafe1234" ] && [ -f "$PREFIX/hooks/.boot-context-last-cafe1234" ] \
+  && [ -f "$PREFIX/hooks/.skip-replay-cafe1234" ]; } \
+  && ok "re-install preserves live boot-context/sentinel state at PREFIX" \
+  || bad "re-install preserves live boot-context/sentinel state at PREFIX"
+{ [ -f "$PREFIX/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs" ] && [ -f "$PREFIX/package.json" ]; } \
+  && ok "re-install preserves engine-local SDK (node_modules + package.json)" \
+  || bad "re-install preserves engine-local SDK (node_modules + package.json)"
+[ ! -e "$PREFIX/hooks/zz-stale-engine-file.sh" ] \
+  && ok "re-install still cleans stale engine files (--delete)" \
+  || bad "re-install still cleans stale engine files (--delete)"
 mp2=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
 [ "$mp2" = "13" ] && ok "idempotent re-install (still 13, not 26)" || bad "idempotent re-install" "got $mp2"
 { [ -L "$SL_LINK" ] && [ "$(readlink "$SL_LINK")" = "$PREFIX/statusline-command.sh" ]; } \
@@ -123,6 +166,58 @@ mp3=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/h
   && ok "statusline: uninstall removes symlink + .statusLine" || bad "statusline: uninstall removes symlink + .statusLine"
 { [ ! -e "$FH/.claude/skills/memory-search" ] && [ ! -e "$FH/.claude/skills/memory-lint" ]; } \
   && ok "skill: uninstall removes symlinks" || bad "skill: uninstall removes symlinks"
+
+# --- uninstall works from the checkout even when PREFIX was already purged ---
+# `rm -rf ~/.memory-pack` then `./install.sh --uninstall` used to die
+# ("engine not found") BEFORE unwiring settings.json, stranding 13 dangling
+# hook registrations; the fallback to the checkout's own merge-settings.sh
+# must unwire them.
+PFX4="$FH/.memory-pack2"
+run --prefix "$PFX4" --yes >/dev/null 2>&1
+rm -rf "$PFX4"
+if run --prefix "$PFX4" --uninstall --yes >/dev/null 2>&1; then
+  mp4=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PFX4"'/hooks/"))]|length' "$FH/.claude/settings.json")
+  [ "$mp4" = "0" ] && ok "uninstall after purged PREFIX still unwires settings (checkout fallback)" \
+    || bad "uninstall after purged PREFIX still unwires settings" "mp=$mp4"
+else
+  bad "uninstall after purged PREFIX still unwires settings" "exited nonzero (die: engine not found?)"
+fi
+
+# --- in-place refusal: any PREFIX resolving to the checkout must die BEFORE
+#     rsync. The raw string compare passed trailing-slash / relative /
+#     symlinked prefixes, and rsync src==dest with a delete pass then removed
+#     .git from the SOURCE checkout. Run against a sacrificial copy. ---
+COPY="$SBX/engine-copy"; mkdir -p "$COPY"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --exclude '.git' "$SRC"/ "$COPY"/
+else
+  cp -R "$SRC"/. "$COPY"/ 2>/dev/null; rm -rf "$COPY/.git"
+fi
+mkdir -p "$COPY/.git"; printf 'ref: sacrificial\n' > "$COPY/.git/HEAD"
+FH3="$SBX/home3"; mkdir -p "$FH3/.claude"; echo '{}' > "$FH3/.claude/settings.json"
+ln -s "$COPY" "$SBX/engine-link"
+ipfail=""
+for P in "$COPY" "$COPY/" "$SBX/engine-link"; do
+  if HOME="$FH3" bash "$COPY/install.sh" --prefix "$P" --yes >/dev/null 2>&1; then
+    ipfail="$ipfail exit0[$P]"
+  fi
+  [ -f "$COPY/.git/HEAD" ] || { ipfail="$ipfail gitgone[$P]"; break; }
+done
+if [ -f "$COPY/.git/HEAD" ]; then
+  ( cd "$COPY" && HOME="$FH3" bash ./install.sh --prefix . --yes >/dev/null 2>&1 ) && ipfail="$ipfail exit0[.]"
+  [ -f "$COPY/.git/HEAD" ] || ipfail="$ipfail gitgone[.]"
+fi
+[ -z "$ipfail" ] && ok "in-place install refused (plain, trailing-slash, symlink, relative)" \
+  || bad "in-place install refused (plain, trailing-slash, symlink, relative)" "$ipfail"
+
+# --- 0-byte settings.json (crash-truncated) must be healed like absent ---
+FH5="$SBX/home5"; mkdir -p "$FH5/.claude"; : > "$FH5/.claude/settings.json"
+if HOME="$FH5" bash "$INSTALL" --prefix "$FH5/.mp" --yes >/dev/null 2>&1 \
+   && jq -e '.env.MEMORY_PACK_HOME' "$FH5/.claude/settings.json" >/dev/null 2>&1; then
+  ok "0-byte settings.json healed to {} and wired"
+else
+  bad "0-byte settings.json healed to {} and wired" "install died at merge or env missing"
+fi
 
 # --- foreign-safety: a REAL regular file at ~/.claude/statusline-command.sh
 #     (a user's own, not our symlink) must NEVER be clobbered ---
