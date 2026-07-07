@@ -29,6 +29,25 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq sqlite3
 
+      # The macos-latest runner's stock Apple `sqlite3` CLI is built WITHOUT
+      # FTS5, so every `SELECT ... FROM memories` (the FTS5 virtual table the
+      # inject hook + test_memory_search_inject read via the CLI) errored "no
+      # such module: fts5" — swallowed by 2>/dev/null → empty → the whole
+      # suite red on macOS only (real macOS users have FTS5, e.g. Apple's
+      # 3.51.0 build does; the runner's is older). Homebrew's sqlite ships
+      # FTS5; prepend its keg-only bin so `sqlite3` resolves to it for the
+      # preflight + suite steps. Probe fails the step loud if FTS5 is still
+      # absent, rather than letting the suite fail cryptically later.
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install sqlite
+          echo "$(brew --prefix sqlite)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix sqlite)/bin/sqlite3" :memory: \
+            'CREATE VIRTUAL TABLE t USING fts5(x);' \
+            && echo "macOS sqlite3 has FTS5" \
+            || { echo "macOS sqlite3 STILL lacks FTS5 after brew install"; exit 1; }
+
       - name: Preflight (install.sh --check)
         run: ./install.sh --check
 
