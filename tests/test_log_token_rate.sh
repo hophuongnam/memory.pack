@@ -177,5 +177,39 @@ echo "$line" | grep -qE '^[0-9]+ sid-BAD 10$' \
   && ok "malformed JSONL: uses last valid usage (10)" \
   || bad "malformed JSONL: uses last valid usage (10)" "got '$line'"
 
+# ─── context compaction: cum DROPS → re-baseline instead of freezing ───────
+# "Cumulative is monotonic by construction" is FALSE across a context
+# compaction: per-boundary cum is that entry's usage fields, which shrink
+# when the context compacts. With last_cum=200000 in the log, post-compact
+# boundaries (30k/35k) were all < last_cum → filtered on every Stop → the
+# sparkline froze for the rest of the session. When the transcript's MAX
+# boundary cum is below the last logged cum, re-baseline to 0 and emit.
+# (The sparkline consumer negative-clamps the 200k→30k delta already.)
+COMPACT=$(mktemp); trap 'rm -rf "$SBX" "$MULTI" "$BAD" "$COMPACT"' EXIT
+cat > "$COMPACT" <<'JL'
+{"type":"user","message":{"content":"post-compact q1"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"a1"}],"usage":{"input_tokens":25000,"output_tokens":5000}}}
+{"type":"user","message":{"content":"post-compact q2"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"a2"}],"usage":{"input_tokens":30000,"output_tokens":5000}}}
+JL
+> "$LOG"
+printf '1779700000 sid-COMPACT 200000\n' >> "$LOG"
+echo "{\"session_id\":\"sid-COMPACT\",\"transcript_path\":\"$COMPACT\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+grep -qE '^[0-9]+ sid-COMPACT 30000$' "$LOG" \
+  && ok "compaction: post-compact boundary 30000 emitted (re-baselined)" \
+  || bad "compaction: post-compact boundary 30000 emitted (re-baselined)" "log=$(cat "$LOG")"
+grep -qE '^[0-9]+ sid-COMPACT 35000$' "$LOG" \
+  && ok "compaction: post-compact boundary 35000 emitted" \
+  || bad "compaction: post-compact boundary 35000 emitted" "log=$(cat "$LOG")"
+# Idempotency across the re-baseline: last_cum now tracks the NEW regime
+# (the most recent logged cum, not the stale max), so a re-fire on the
+# unchanged transcript must add nothing.
+n_before=$(wc -l < "$LOG")
+echo "{\"session_id\":\"sid-COMPACT\",\"transcript_path\":\"$COMPACT\",\"hook_event_name\":\"Stop\"}" | bash "$HOOK"
+n_after=$(wc -l < "$LOG")
+[ "$n_before" -eq "$n_after" ] \
+  && ok "compaction: re-fire after re-baseline is a no-op (no duplicate samples)" \
+  || bad "compaction: re-fire after re-baseline is a no-op" "before=$n_before after=$n_after log=$(cat "$LOG")"
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

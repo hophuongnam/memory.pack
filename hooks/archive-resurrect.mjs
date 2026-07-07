@@ -17,9 +17,11 @@
 // false positives would silently destroy a valid new memory by inheriting
 // wrong metadata.
 
-import { readFileSync, writeFileSync, renameSync, existsSync, statSync, unlinkSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
-import { fmParse, fmSetInPlace, fmSerialize } from './_lib.mjs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { fmParse, fmSetInPlace, fmSerialize, appendAudit } from './_lib.mjs';
 
 const [, , memoryPath] = process.argv;
 if (!memoryPath) process.exit(0);
@@ -108,6 +110,21 @@ try {
   unlinkSync(archivePath);
 } catch {}
 
+// Re-sync the FTS5 index for BOTH paths (update-recall's promotion idiom):
+// the unlink above is out-of-band — no PostToolUse fires for unlinkSync —
+// so the archive row went stale until the SessionEnd reconcile. The active
+// path is re-upserted too (this script just mutated its frontmatter after
+// the Write-hook indexer may have already read it). Backgrounded.
+try {
+  const indexer = join(dirname(fileURLToPath(import.meta.url)), '..', 'index', 'index-memories.py');
+  if (existsSync(indexer)) {
+    spawn('python3', [indexer, '--file', archivePath, '--quiet'], { detached: true, stdio: 'ignore' }).unref();
+    spawn('python3', [indexer, '--file', memoryPath, '--quiet'], { detached: true, stdio: 'ignore' }).unref();
+  }
+} catch {
+  // non-fatal — SessionEnd reconcile will catch it
+}
+
 // Audit log. Dotfile prefix so memory-lint skips it.
 const logPath = join(memDir, '.archive-resurrect.log');
 const stamp = new Date().toISOString();
@@ -115,5 +132,5 @@ const created = archivedCreated || '?';
 const recallCount = archivedRecallCount || '0';
 const logLine = `${stamp} resurrect ${baseName} (created=${created}, recall_count=${recallCount}, days_in_archive=${daysInArchive})\n`;
 try {
-  appendFileSync(logPath, logLine);
+  appendAudit(logPath, logLine);
 } catch {}

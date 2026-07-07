@@ -5,11 +5,15 @@
 #
 # Backfill semantics: scan the whole transcript for "turn boundaries" and
 # emit one log line per boundary whose cumulative-tokens count exceeds the
-# max already logged for this session. On a /resume'd session this catches
+# last one logged for this session. On a /resume'd session this catches
 # up all prior turns on the first Stop, so line 3 lights up immediately
 # instead of after the second Stop. Subsequent Stops are no-ops until new
-# turns happen (idempotent via the monotonic cum > last-logged filter —
-# session cumulative tokens are monotonic by construction).
+# turns happen (idempotent via the monotonic cum > last-logged filter).
+# Cumulative tokens are NOT monotonic across a context compaction — the
+# per-boundary cum shrinks with the compacted context — so when the
+# transcript's MAX boundary is below the last logged cum, the filter
+# re-baselines to 0 instead of freezing the sparkline for the rest of the
+# session. (The sparkline consumer negative-clamps the cross-regime delta.)
 #
 # A "turn boundary" = an assistant entry with .message.usage whose immediate
 # next user-or-assistant entry is a REAL user-prompt (string content, OR
@@ -35,10 +39,13 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // .transcriptPath /
 
 LOG="$HOME/.claude/statusline-token-rate.log"
 
-# Highest cumulative already logged for this session (0 if none / no log).
+# MOST RECENT cumulative logged for this session (0 if none / no log).
+# Last, not max: within a monotonic regime they are identical, but after a
+# compaction re-baseline the stale pre-compact max would force a re-emit on
+# every Stop — the last line tracks the CURRENT regime.
 last_cum=0
 if [ -f "$LOG" ]; then
-  last_cum=$(awk -v sid="$session_id" '$2 == sid && $3+0 > m+0 { m = $3+0 } END { print m+0 }' "$LOG")
+  last_cum=$(awk -v sid="$session_id" '$2 == sid { m = $3+0 } END { print m+0 }' "$LOG")
 fi
 
 # Walk transcript: per-line parse (skip malformed via fromjson?), pre-filter
@@ -74,9 +81,13 @@ samples=$(
             $next == null or ($next | is_user_prompt)
           )
         ) | .value | cum_tokens
-      ] |
-      # Monotonic-cum filter: only emit boundaries strictly above last_cum.
-      reduce .[] as $c ({prev: $last_cum, out: []};
+      ] as $bounds |
+      # Monotonic-cum filter, compaction-aware: cum DROPS when the context
+      # compacts, so if every boundary sits below last_cum, re-baseline to
+      # 0 and emit the new regime instead of filtering forever.
+      (if (($bounds | max) // 0) < $last_cum then 0 else $last_cum end) as $base |
+      $bounds |
+      reduce .[] as $c ({prev: $base, out: []};
         if $c > .prev then {prev: $c, out: (.out + [$c])} else . end
       ) |
       .out[]

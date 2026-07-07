@@ -5,11 +5,11 @@
 // Idempotent per-day per-session via a sidecar marker so a single session
 // that re-reads the same memory doesn't inflate recall_count.
 
-import { readFileSync, writeFileSync, renameSync, existsSync, closeSync, openSync, readdirSync, statSync, unlinkSync, utimesSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, closeSync, openSync, readdirSync, statSync, unlinkSync, utimesSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fmParse, fmSetInPlace, fmSerialize } from './_lib.mjs';
+import { fmParse, fmSetInPlace, fmSerialize, appendAudit } from './_lib.mjs';
 
 const [, , memoryPath, sessionId] = process.argv;
 if (!memoryPath) process.exit(0);
@@ -142,7 +142,7 @@ if (isArchived && newCount >= PROMOTION_THRESHOLD) {
   } catch (err) {
     try {
       const log = archivePromoteLog(memoryPath);
-      appendFileSync(log, `${new Date().toISOString()} error ${basename(memoryPath)} (${err && err.message ? err.message : String(err)})\n`);
+      appendAudit(log, `${new Date().toISOString()} error ${basename(memoryPath)} (${err && err.message ? err.message : String(err)})\n`);
     } catch {}
   }
 }
@@ -169,7 +169,7 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
   const stamp = new Date().toISOString();
 
   if (existsSync(activePath)) {
-    appendFileSync(log, `${stamp} skip-collision ${basename(archivePath)} (active path already exists)\n`);
+    appendAudit(log, `${stamp} skip-collision ${basename(archivePath)} (active path already exists)\n`);
     return;
   }
 
@@ -192,7 +192,7 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
   try {
     indexUpdated = updateMemoryIndex(activePath, keys);
   } catch (err) {
-    appendFileSync(log, `${stamp} index-update-failed ${basename(activePath)} (${err && err.message ? err.message : String(err)})\n`);
+    appendAudit(log, `${stamp} index-update-failed ${basename(activePath)} (${err && err.message ? err.message : String(err)})\n`);
   }
 
   // Re-sync the FTS5 index: delete archive entry, insert active entry.
@@ -207,7 +207,7 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
     // non-fatal — SessionEnd reconcile will catch it
   }
 
-  appendFileSync(
+  appendAudit(
     log,
     `${stamp} promote ${basename(archivePath)} (recall_count=${recallCount}, index_updated=${indexUpdated})\n`
   );

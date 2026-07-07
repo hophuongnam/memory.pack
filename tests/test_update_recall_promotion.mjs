@@ -23,7 +23,7 @@
 
 import { execFileSync } from 'node:child_process';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync,
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -179,6 +179,35 @@ function run(path, sid, extraEnv = {}) {
   eq('below threshold: not promoted', false, existsSync(join(mem, 'promo.md')));
   eq('below threshold: no audit log written', false,
      existsSync(join(mem, '.archive-promote.log')));
+}
+
+// === audit-log rotation: .archive-promote.log must not grow forever ======
+// Runtime-state-GC class: the promote/skip/error audit lines appended on
+// every event with no cap. Past ~64KB the writer must keep only the
+// newest lines (the log is an audit tail, not an archive).
+{
+  const mem = mkStore('s6');
+  const arch = join(mem, 'archive', 'promo.md');
+  writeFileSync(arch, FM('promo', 'd', 'feedback', 2));
+  const log = join(mem, '.archive-promote.log');
+  const junk = Array.from({ length: 2000 }, (_, i) =>
+    `2026-01-01T00:00:00.000Z promote old_${i}.md (recall_count=3, index_updated=true)`
+  ).join('\n') + '\n';
+  writeFileSync(log, junk); // ~150KB, well past the cap
+  run(arch, 'sid-f');
+
+  const after = readFileSync(log, 'utf8');
+  (statSync(log).size < 70000)
+    ? ok('audit rotation: oversized promote log shrank below the cap')
+    : bad('audit rotation: oversized promote log shrank below the cap',
+          '< 70000 bytes', String(statSync(log).size));
+  has('audit rotation: fresh promote line survives rotation', after,
+      ' promote promo.md (recall_count=3');
+  has('audit rotation: newest pre-rotation lines retained', after,
+      'promote old_1999.md (');
+  (!after.includes('promote old_0.md ('))
+    ? ok('audit rotation: oldest lines dropped')
+    : bad('audit rotation: oldest lines dropped', 'old_0 line gone', 'still present');
 }
 
 rmSync(tmp, { recursive: true, force: true });

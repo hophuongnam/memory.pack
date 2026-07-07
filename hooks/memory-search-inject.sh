@@ -26,7 +26,7 @@
 INPUT=$(cat)
 
 # .prompt is the documented field; .userPrompt is the camelCase drift
-# fallback (see feedback_cc_hook_input_fields.md).
+# fallback (see reference_cc_hook_input_fields.md).
 PROMPT=$(echo "$INPUT" | jq -r '.prompt // .userPrompt // empty')
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty')
 
@@ -58,8 +58,13 @@ esac
 # applies the original MIN_LEN floor below.
 TRANSCRIPT_TEXT=""
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+  # isMeta filter: the engine's OWN injected blocks (memory hits, boot
+  # context, auto-save feedback) arrive as isMeta:true user entries —
+  # blending them feeds our own output back into the query tokens on
+  # every follow-up prompt (a search feedback loop).
   TRANSCRIPT_TEXT=$(tail -n "$TRANSCRIPT_TAIL_LINES" "$TRANSCRIPT" 2>/dev/null \
     | jq -r 'select(.type == "user" or .type == "assistant")
+             | select((.isMeta // false) | not)
              | .message.content as $c
              | if ($c | type) == "string" then $c
                elif ($c | type) == "array" then
@@ -181,8 +186,14 @@ SQL
 # Threshold + coverage filter + output cap. BM25 is negative; smaller
 # (more negative) = better. We want rank <= THRESHOLD (e.g. -8.0) AND
 # matches >= MIN_MATCHES (coverage filter).
+# Project display prefix: strip the slugified $HOME so store slugs read as
+# project names on ANY host (the old hardcoded -Users-namhp-Resilio-Sync-
+# prefix only ever matched the original machine).
+HOME_SLUG=$(printf '%s' "$HOME" | sed 's|[/.]|-|g')
+
 BODY=$(printf '%s\n' "$HITS" | awk -F$'\x01' \
   -v t="$THRESHOLD" -v cap="$OUTPUT_LIMIT" \
+  -v home_slug="$HOME_SLUG" \
   -v min_match="$MIN_MATCHES" -v tokens="$TOKENS" '
 BEGIN {
   n_tok = split(tokens, tok_arr, " ");
@@ -204,7 +215,9 @@ NF >= 8 && ($1 + 0.0) <= (t + 0.0) {
   desc_short = desc;
   if (length(desc_short) > 160) desc_short = substr(desc_short, 1, 160) "…";
   short_project = project;
-  sub(/^-Users-namhp-Resilio-Sync-/, "", short_project);
+  # index/substr, not a dynamic regex: the slug may contain metacharacters.
+  if (home_slug != "" && index(short_project, home_slug "-") == 1)
+    short_project = substr(short_project, length(home_slug) + 2);
   printf "- [bm25=%s · cov=%d/%d · %s · %s · %s] %s\n  %s\n",
     rank, matches, n_tok, status, type, short_project, path, desc_short;
   shown++;

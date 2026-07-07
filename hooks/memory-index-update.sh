@@ -24,18 +24,23 @@ FILE_PATH=$(echo "$INPUT" | jq -r '(.tool_input // .toolInput // {}).file_path /
 [ -n "$FILE_PATH" ] || exit 0
 
 # Only memory files under ~/.claude/projects/<slug>/memory/ — including
-# anything under archive/. Note the more permissive glob compared to
-# archive-resurrect.sh (which deliberately skips archive/ writes).
+# anything under archive/ at ANY depth: in a `case` pattern `*` crosses
+# `/` (fnmatch without FNM_PATHNAME), so this single glob already matches
+# nested archive/sub/ paths. More permissive than archive-resurrect.sh by
+# design (that hook deliberately skips archive/ writes).
 case "$FILE_PATH" in
   "$HOME"/.claude/projects/*/memory/*.md) ;;
-  "$HOME"/.claude/projects/*/memory/*/*.md) ;;
   *) exit 0 ;;
 esac
 
-# Skip index/sessions/pending/dotfiles. Same skip list as archive-resurrect.sh.
+# Skip derived/meta files — but NOT sessions.log.md: the indexer
+# deliberately indexes session logs as type=session (index-memories.py
+# SKIP_BASENAMES comment). Skipping it here left live session-log writes
+# stale in the index until the SessionEnd reconcile. Deliberately narrower
+# than archive-resurrect.sh's skip list.
 BASENAME=$(basename "$FILE_PATH")
 case "$BASENAME" in
-  MEMORY.md|SESSIONS.md|sessions.log.md|PENDING_MEMORIES.md|SCHEMA.md) exit 0 ;;
+  MEMORY.md|SESSIONS.md|PENDING_MEMORIES.md|SCHEMA.md) exit 0 ;;
   .*) exit 0 ;;
 esac
 

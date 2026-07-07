@@ -153,9 +153,11 @@ project store — types, frontmatter, decay model. No per-project copy.
 
 ## Portability
 
-Engine root relocatable: `MEMORY_SEARCH_DB` > `$MEMORY_PACK_HOME` >
-`~/.memory-pack` (honored by `index/*.py` + `memory-search-inject.sh`;
-SCHEMA pointers resolve, not literal). `hooks/_lib.mjs`
+Engine root relocatable: `index/*.py` resolve the DB via
+`$MEMORY_PACK_HOME` > `~/.memory-pack` and deliberately IGNORE
+`MEMORY_SEARCH_DB` (pinned by `test_mph_resolution`); only
+`memory-search-inject.sh` honors `MEMORY_SEARCH_DB` as a highest-precedence
+override (SCHEMA pointers resolve, not literal). `hooks/_lib.mjs`
 `resolveSdkSpecifier` resolves the agent SDK portably (env > MPH-local >
 unix globals > Windows `%APPDATA%\npm` > bare; degrades gracefully).
 Install on any host: `git clone … && ./install.sh` (idempotent,

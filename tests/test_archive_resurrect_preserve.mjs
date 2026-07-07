@@ -144,6 +144,22 @@ check('D: no bogus created invented', !/^created:/m.test(out), out);
 check('D: no bogus recall_count invented', !/^recall_count:/m.test(out), out);
 check('D: last_reviewed still stamped', new RegExp(`^last_reviewed: ${today}$`, 'm').test(out), out);
 
+// === E: FTS re-sync + capped audit log (structural pins) ==================
+// The resurrect unlinks the archive copy OUT-OF-BAND (no PostToolUse fires
+// for unlinkSync), leaving a stale FTS row until SessionEnd reconcile —
+// it must spawn the indexer for both paths (update-recall's promotion
+// idiom). Its audit append must go through the size-capped appendAudit
+// helper (runtime-state-GC class).
+{
+  const src = readFileSync(RESURRECT, 'utf8');
+  check('E: indexer re-sync spawned for the deleted archive path',
+        src.includes("'--file', archivePath"), 'no spawn for archivePath');
+  check('E: indexer re-sync spawned for the resurrected active path',
+        src.includes("'--file', memoryPath"), 'no spawn for memoryPath');
+  check('E: audit append is size-capped via appendAudit',
+        src.includes('appendAudit('), 'raw appendFileSync used for the audit log');
+}
+
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
 console.log(`${fail} FAILED`); process.exit(1);

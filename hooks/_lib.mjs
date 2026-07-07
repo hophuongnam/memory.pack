@@ -1,7 +1,7 @@
 // Memory.Pack shared Node helpers. Imported by .mjs hooks via a relative
 // specifier (`./_lib.mjs`, always co-located → portable); never executed
 // directly. Leading-underscore name mirrors _lib.sh.
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 
 const SDK_REL = 'node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk/sdk.mjs';
@@ -75,6 +75,25 @@ export function fmSetInPlace(lines, key, value) {
 export function fmSerialize(lines, rest, eol = '\n') {
   if (lines.length === 0) return `---${eol}---${eol}${rest}`;
   return `---${eol}${lines.join('\n')}\n---${eol}${rest}`;
+}
+
+// appendAudit(logPath, line): append to a dotfile audit log with a size
+// cap. Audit logs (.archive-promote.log / .archive-resurrect.log) append
+// one line per event and previously grew forever (runtime-state-GC class).
+// Past maxBytes only the newest keepLines survive — these logs are a
+// recent-events tail, not an archive. Rotation is check-then-act;
+// concurrent writers can race it, but this is audit/display state where
+// last-writer-wins is fine, and rotation must never block the append.
+export function appendAudit(logPath, line, { maxBytes = 65536, keepLines = 200 } = {}) {
+  try {
+    if (existsSync(logPath) && statSync(logPath).size > maxBytes) {
+      const kept = readFileSync(logPath, 'utf8').split('\n').slice(-keepLines).join('\n');
+      writeFileSync(logPath, kept === '' || kept.endsWith('\n') ? kept : kept + '\n');
+    }
+  } catch {
+    // best-effort rotation
+  }
+  appendFileSync(logPath, line);
 }
 
 // extractConversation: flatten CC session messages into "USER:/ASSISTANT:"

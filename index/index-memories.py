@@ -20,7 +20,6 @@ import argparse
 import os
 import pathlib
 import sqlite3
-import sys
 
 HOME = pathlib.Path.home()
 PROJECTS_ROOT = HOME / ".claude" / "projects"
@@ -60,18 +59,30 @@ CREATE TABLE IF NOT EXISTS files (
   rowid_in_fts INTEGER NOT NULL,
   mtime INTEGER NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS files_rowid ON files(rowid_in_fts);
 """
+# files.mtime holds st_mtime_ns (nanoseconds). It was int(st_mtime): a
+# content edit landing in the same wall-clock second compared EQUAL and the
+# row stayed stale forever — --file upsert and reconcile both skipped it.
+# Legacy second-granularity rows simply compare unequal once and re-upsert.
+# (No index on rowid_in_fts: no query ever filters by it.)
 
 
 def parse_frontmatter(text):
+    # read_text opens in text mode, so universal newlines already normalize
+    # \r\n to \n before we see it (CRLF fences need no special case here,
+    # unlike the raw-bytes _lib.mjs fmParse). Two things text mode does NOT
+    # absorb: a utf-8-sig BOM survives as U+FEFF and defeats startswith;
+    # and an EMPTY frontmatter block's close fence sits at index 3, which a
+    # find() starting at 4 skips — the body-splice class (mirror of the
+    # _lib.mjs fmParse fix).
+    if text.startswith("\ufeff"):
+        text = text[1:]
     if not text.startswith("---\n"):
         return {}, text
-    end = text.find("\n---\n", 4)
+    end = text.find("\n---\n", 3)
     if end < 0:
         return {}, text
-    fm_block = text[4:end]
+    fm_block = text[4:end] if end > 3 else ""
     body = text[end + 5 :]
     fm = {}
     for line in fm_block.split("\n"):
@@ -93,7 +104,20 @@ def project_slug(path: pathlib.Path) -> str:
 
 
 def is_archived(path: pathlib.Path) -> bool:
-    return "archive" in path.parts
+    # Relative to the memory root, NEVER the absolute path — a host path
+    # containing an "archive" component (e.g. HOME=/srv/archive/home)
+    # flagged every active memory in the corpus as archived. Anchor to
+    # PROJECTS_ROOT when possible; fall back to raw parts for out-of-store
+    # paths (sandboxed test stores, ad-hoc --file targets).
+    try:
+        parts = path.relative_to(PROJECTS_ROOT).parts
+    except ValueError:
+        parts = path.parts
+    try:
+        i = parts.index("memory")
+    except ValueError:
+        return False
+    return "archive" in parts[i + 1 :]
 
 
 def should_index(path: pathlib.Path) -> bool:
@@ -154,7 +178,21 @@ def walk_memory_files():
 def open_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
-    conn.executescript(SCHEMA_SQL)
+    try:
+        conn.executescript(SCHEMA_SQL)
+    except sqlite3.DatabaseError:
+        # A corrupt/garbage db raised here on EVERY invocation and wedged
+        # the index forever — all four workers run detached with stdio
+        # /dev/null'd, so nothing ever surfaced. The index is derived
+        # state: drop it and recreate; the next reconcile refills it.
+        conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(str(DB_PATH) + suffix)
+            except OSError:
+                pass
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.executescript(SCHEMA_SQL)
     return conn
 
 
@@ -164,7 +202,7 @@ def upsert(conn, path: pathlib.Path) -> str:
     if rec is None:
         return "skipped"
     try:
-        mtime = int(path.stat().st_mtime)
+        mtime = path.stat().st_mtime_ns
     except OSError:
         return "skipped"
     abs_path = rec["abs_path"]
@@ -232,7 +270,7 @@ def sync_incremental(conn):
     on_disk = {}
     for p in walk_memory_files():
         try:
-            on_disk[str(p)] = int(p.stat().st_mtime)
+            on_disk[str(p)] = p.stat().st_mtime_ns
         except OSError:
             continue
     in_db = {

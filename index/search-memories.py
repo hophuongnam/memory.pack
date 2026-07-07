@@ -64,10 +64,15 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
-    if not DB_PATH.exists():
+    # 0-byte counts as missing: sqlite would initialize it and then die on
+    # "no such table" instead of showing the hint. The hint text is STATIC
+    # $MEMORY_PACK_HOME phrasing — DB_PATH.parent pointed at the DB dir
+    # (e.g. ~/.memory-pack/index/), where index-memories.py does not live.
+    if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
         print(
             f"no index at {DB_PATH} — run "
-            f"`{DB_PATH.parent}/index-memories.py --rebuild` first",
+            "`$MEMORY_PACK_HOME/index/index-memories.py --rebuild` "
+            "(the indexer lives in the engine checkout) first",
             file=sys.stderr,
         )
         sys.exit(2)
