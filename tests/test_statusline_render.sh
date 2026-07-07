@@ -99,6 +99,18 @@ if [ -f "$ICONS" ]; then
     val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=0 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
     [ -n "$val" ] && ok "$icon exports under Unicode fallback" || bad "$icon exports under Unicode fallback"
   done
+
+  # ICON_MEMORY (Nerd table) must be the BRAIN glyph (md-brain, U+F09D1), not
+  # the person/account silhouette (md-account, U+F0004). U+F0004 renders as a
+  # man silhouette — the reported symptom. No PUA literal in this source (it
+  # doesn't survive markdown roundtrips), so assert on the resolved codepoint
+  # via python3. Doubles as a mutation guard: reverting to F0004 fails loudly.
+  mem_cp=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "$ICON_MEMORY"' \
+    _ "$HOOKS/_lib.sh" "$THEME" "$ICONS" \
+    | python3 -c 'import sys; s=sys.stdin.read(); print(("%X"%ord(s[0])) if s else "EMPTY")')
+  [ "$mem_cp" = "F09D1" ] \
+    && ok "ICON_MEMORY (Nerd) is md-brain U+F09D1" \
+    || bad "ICON_MEMORY (Nerd) is md-brain U+F09D1 (F0004=md-account silhouette)" "got U+$mem_cp"
 fi
 
 # ─── mp_pill_fg luminance flip ────────────────────────────────────────────

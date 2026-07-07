@@ -14,7 +14,7 @@
 #   ICON_BRANCH        U+E0A0  nf-pl-branch              U+2387  HELM SYMBOL (⎇)
 #   ICON_DIRTY         U+E0A1  nf-pl-branch_detached     U+002A  asterisk (*)
 #   ICON_PWD           U+F115  nf-fa-folder_open         ""      (omit in fallback)
-#   ICON_MEMORY        U+F0004 nf-md-brain               U+1F9E0 brain (🧠)
+#   ICON_MEMORY        U+F09D1 nf-md-brain               U+1F9E0 brain (🧠)
 #   ICON_BOOT_OK       U+F00C  nf-fa-check               U+2713  check (✓)
 #   ICON_BOOT_PENDING  U+F017  nf-fa-clock_o             U+23F3  hourglass (⏳)
 #   ICON_BOOT_ERR      U+F071  nf-fa-warning             U+26A0  warning (⚠)
@@ -29,7 +29,7 @@ if _mp_have_nerdfont 2>/dev/null; then
   ICON_BRANCH=""
   ICON_DIRTY=""
   ICON_PWD=""
-  ICON_MEMORY="󰀄"
+  ICON_MEMORY="󰧑"
   ICON_BOOT_OK=""
   ICON_BOOT_PENDING=""
   ICON_BOOT_ERR=""
