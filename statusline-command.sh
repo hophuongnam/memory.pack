@@ -22,7 +22,7 @@ input=$(cat)
 # contain U+001F or newlines (paths, ids, numbers, display names).
 # Snake↔camel fallbacks per invariant #3.
 US=$(printf '\037')
-mp_fields=$(echo "$input" | jq -r '[
+mp_fields=$(printf '%s' "$input" | jq -r '[
     (.workspace.project_dir                  // .workspace.projectDir               // ""),
     (.cwd // .workspace.current_dir          // .workspace.currentDir               // ""),
     (.model.display_name                     // .model.displayName                  // ""),
@@ -44,7 +44,7 @@ dir=$(basename "$project_dir")
 # --- Vibe coding method ---
 vibe=""
 if [ -n "$project_dir" ] && [ -f "$project_dir/vibeCodingMethod" ]; then
-    vibe=$(cat "$project_dir/vibeCodingMethod" | tr -d '\n')
+    vibe=$(tr -d '\n' < "$project_dir/vibeCodingMethod")
 fi
 
 # Project-hash helper — value-identical to Memory.Pack/hooks/_lib.sh
@@ -91,11 +91,18 @@ mp_resolve_project_key() {
     printf '%s' "$_fb"
 }
 
+# One wall-clock read per render (format_reset runs up to twice, the 7d
+# warn calc once — three date forks for one value).
+now=$(date +%s)
+
 # Format reset epoch (seconds) to a short relative countdown.
 format_reset() {
     reset_epoch="$1"
-    [ -z "$reset_epoch" ] && return
-    diff=$(( reset_epoch - $(date +%s) ))
+    # Non-integer epochs (ISO string, torn field) must be rejected BEFORE
+    # $(( )): under dash a non-integer operand is a FATAL arithmetic error
+    # (bash merely spews to stderr). Same idiom as the turns-file guard.
+    case "$reset_epoch" in ''|*[!0-9]*) return ;; esac
+    diff=$(( reset_epoch - now ))
     if [ "$diff" -le 0 ]; then
         printf "now"
     elif [ "$diff" -lt 3600 ]; then
@@ -198,7 +205,11 @@ fi
 # opted out for this session is visible rather than silent.
 
 # --- Source render helpers ---
-# SL_DIR / MP_HOOKS_DIR already resolved above.
+# SL_DIR / MP_HOOKS_DIR already resolved above. _lib.sh MUST come before
+# icons: statusline-icons.sh calls _mp_have_nerdfont (defined only in
+# _lib.sh) — without it the probe exited 127 and the Nerd table plus the
+# MEMORY_PACK_NERDFONT=1 override were silently dead in production.
+. "$MP_HOOKS_DIR/_lib.sh"
 . "$MP_HOOKS_DIR/statusline-theme.sh"
 . "$MP_HOOKS_DIR/statusline-icons.sh"
 . "$MP_HOOKS_DIR/statusline-render.sh"
@@ -285,11 +296,13 @@ git_part=""
 if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
   branch=$(git -C "$project_dir" symbolic-ref --short HEAD 2>/dev/null || git -C "$project_dir" rev-parse --short HEAD 2>/dev/null)
   if [ -n "$branch" ]; then
+    # ONE diff fork: --shortstat output doubles as the dirty probe (empty ⟺
+    # clean for tracked files — the same signal `diff --quiet HEAD` gave).
+    diffstat=$(git -C "$project_dir" diff HEAD --shortstat 2>/dev/null)
     dirty=""
-    git -C "$project_dir" diff --quiet HEAD 2>/dev/null || dirty="$(ansi_fg "$THEME_FG_DIRTY")${ICON_DIRTY}${RESET}"
+    [ -n "$diffstat" ] && dirty="$(ansi_fg "$THEME_FG_DIRTY")${ICON_DIRTY}${RESET}"
     line_info=""
     if [ "$mode" != "narrow" ]; then
-      diffstat=$(git -C "$project_dir" diff HEAD --shortstat 2>/dev/null)
       adds=$(echo "$diffstat" | grep -o '[0-9]* insertion' | grep -o '[0-9]*')
       dels=$(echo "$diffstat" | grep -o '[0-9]* deletion' | grep -o '[0-9]*')
       [ -n "$adds" ] && line_info="$(ansi_fg "$THEME_FG_LINES_ADD")+${adds}${RESET}"
@@ -390,8 +403,11 @@ overlay=""
 [ -n "$turns_themed" ]       && overlay="${overlay:+${overlay} }${turns_themed}"
 [ -n "$overlay" ]            && cont_display="${sep}${overlay}"
 
-printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b ${pill}%b%b\n" \
-  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$git_part" "$cont_display"
+# The pill rides a %b ARGUMENT, never the format string: model.display_name
+# is external input, and a % in it becomes a printf directive when embedded
+# in the format (mangled line + stderr noise on every render).
+printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b %b%b%b\n" \
+  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$pill" "$git_part" "$cont_display"
 
 # --- Line 2 ---
 parts=""
@@ -405,14 +421,20 @@ fi
 if [ -n "$seven_d" ]; then
   [ -n "$parts" ] && parts="${parts}${sep}"
   seven_d_warn=80
-  if [ -n "$seven_d_reset" ]; then
-    days_left=$(( (seven_d_reset - $(date +%s)) / 86400 ))
-    [ "$days_left" -lt 0 ] && days_left=0
-    [ "$days_left" -gt 7 ] && days_left=7
-    days_elapsed=$(( 7 - days_left ))
-    seven_d_warn=$(( days_elapsed * 100 / 7 ))
-    [ "$seven_d_warn" -lt 14 ] && seven_d_warn=14
-  fi
+  # Int-guard before $(( )) — same class as format_reset: a non-integer
+  # resets_at was FATAL under dash at this top-level site, blanking lines
+  # 2-3 of every render. Non-integer → keep the static default threshold.
+  case "$seven_d_reset" in
+    ''|*[!0-9]*) ;;
+    *)
+      days_left=$(( (seven_d_reset - now) / 86400 ))
+      [ "$days_left" -lt 0 ] && days_left=0
+      [ "$days_left" -gt 7 ] && days_left=7
+      days_elapsed=$(( 7 - days_left ))
+      seven_d_warn=$(( days_elapsed * 100 / 7 ))
+      [ "$seven_d_warn" -lt 14 ] && seven_d_warn=14
+      ;;
+  esac
   parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
 fi
 # $parts is used AS the printf FORMAT string — format_pct must emit %%%% (not %)

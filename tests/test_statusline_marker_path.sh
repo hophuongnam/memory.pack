@@ -90,7 +90,7 @@ printf 'loaded' > "$PREFIX/hooks/.boot-marker-${SID}"
 
 STDIN_JSON="$(printf '{"session_id":"%s","workspace":{"project_dir":"%s"},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID" "$PROJ")"
 
-OUT="$(printf '%s' "$STDIN_JSON" | "$LINK" 2>/dev/null)"
+OUT="$(printf '%s' "$STDIN_JSON" | MEMORY_PACK_NERDFONT=0 "$LINK" 2>/dev/null)"
 
 case "$OUT" in
   *"✓booted"*) ok "✓booted renders from relocated hooks/ (via symlink)" ;;
@@ -105,7 +105,7 @@ esac
 
 # --- mutation check: marker contents are honored, not just presence -----
 printf 'pending' > "$PREFIX/hooks/.boot-marker-${SID}"
-OUT2="$(printf '%s' "$STDIN_JSON" | "$LINK" 2>/dev/null)"
+OUT2="$(printf '%s' "$STDIN_JSON" | MEMORY_PACK_NERDFONT=0 "$LINK" 2>/dev/null)"
 case "$OUT2" in
   *"⏳pending"*) ok "⏳pending distinguished from ✓booted (contents honored)" ;;
   *) bad "⏳pending distinguished from ✓booted (contents honored)" \

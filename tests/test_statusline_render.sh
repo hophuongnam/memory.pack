@@ -662,5 +662,123 @@ if [ -f "$SL" ]; then
     || ok "turns: absent turns file → no countdown indicator (graceful)"
 fi
 
+# ─── Nerd table in PRODUCTION: statusline-command.sh must source _lib.sh ──
+# statusline-command.sh sourced theme/icons/render but NOT _lib.sh, so
+# _mp_have_nerdfont (defined only in _lib.sh) was undefined at icons.sh:28:
+# `if _mp_have_nerdfont 2>/dev/null` exited 127 → else branch → the Nerd
+# table AND the MEMORY_PACK_NERDFONT=1 override were DEAD in production.
+# The unit paths above mask it (they pre-source _lib.sh) and every earlier
+# integration render pins NERDFONT=0 — this is the unmasked case.
+if [ -f "$SL" ]; then
+  # Expected glyph resolved from the real tables the unit-path way (no PUA
+  # literals in this test source — they don't survive markdown roundtrips).
+  NERD_PWD=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "$ICON_PWD"' \
+    _ "$HOOKS/_lib.sh" "$THEME" "$HOOKS/statusline-icons.sh")
+  l1=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=1 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null | head -n 1)
+  if [ -n "$NERD_PWD" ] && printf '%s' "$l1" | grep -qF "$NERD_PWD"; then
+    ok "NERDFONT=1 production render shows Nerd ICON_PWD glyph"
+  else
+    bad "NERDFONT=1 production render shows Nerd ICON_PWD glyph" "line1: $l1"
+  fi
+  # Structural: _lib.sh sourced BEFORE statusline-icons.sh.
+  if awk '/^\. .*\/_lib\.sh"/ && !lib {lib=NR} /^\. .*statusline-icons\.sh"/ && !icons {icons=NR} END {exit !(lib && icons && lib < icons)}' "$SL"; then
+    ok "statusline-command.sh sources _lib.sh before icons"
+  else
+    bad "statusline-command.sh sources _lib.sh before icons" "source order/presence wrong"
+  fi
+fi
+
+# ─── garbage rate-limit epochs must not blank or noise the render ─────────
+# resets_at flows into $(( )) at two sites (format_reset; the 7d dynamic
+# warn threshold). A non-integer value (ISO timestamp, torn field) was
+# FATAL under dash — Linux /bin/sh — killing the whole script mid-render;
+# bash survived but spewed arithmetic syntax errors to stderr on EVERY
+# render. Guard idiom: the turns-file case-int checks.
+if [ -f "$SL" ]; then
+  FIX_BADEPOCH="$TMPHOME/.claude/stdin-badepoch.json"
+  jq '.rate_limits.five_hour.resets_at = "soon-1.5"
+      | .rate_limits.seven_day.resets_at = "2026-07-07T12:00:00Z"' \
+    "$FIX/statusline-stdin-full.json" > "$FIX_BADEPOCH"
+
+  err=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_BADEPOCH" 2>&1 >/dev/null)
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_BADEPOCH" 2>/dev/null)
+  lc=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  [ "$lc" = "3" ] && ok "garbage resets_at (bash): all 3 lines render" \
+    || bad "garbage resets_at (bash): all 3 lines render" "got $lc; out: $out"
+  [ -z "$err" ] && ok "garbage resets_at (bash): stderr silent" \
+    || bad "garbage resets_at (bash): stderr silent" "stderr: $err"
+
+  # dash leg — the fatal one (Linux /bin/sh); macOS ships /bin/dash too.
+  if command -v dash >/dev/null 2>&1; then
+    dout=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 dash "$SL" < "$FIX_BADEPOCH" 2>/dev/null)
+    dlc=$(printf '%s\n' "$dout" | wc -l | tr -d ' ')
+    [ "$dlc" = "3" ] && ok "garbage resets_at (dash): all 3 lines render" \
+      || bad "garbage resets_at (dash): all 3 lines render" "got $dlc; out: $dout"
+  fi
+
+  # Mutation guard: the int-guard must not swallow VALID epochs — the stock
+  # fixture ("9999999999") keeps its ↻ countdown on line 2.
+  out=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out" | sed -n '2p' | grep -q '↻' \
+    && ok "valid resets_at keeps the ↻ countdown" \
+    || bad "valid resets_at keeps the ↻ countdown" "line2: $(echo "$out" | sed -n '2p')"
+fi
+
+# ─── % in model.display_name must not corrupt the line-1 printf ───────────
+# ${pill} sat INSIDE the printf FORMAT string; a display_name containing %
+# became printf directives → mangled line + stderr noise. The pill must
+# ride a %b argument instead.
+if [ -f "$SL" ]; then
+  FIX_PCT="$TMPHOME/.claude/stdin-pctmodel.json"
+  jq '.model.display_name = "opus 100% turbo"' "$FIX/statusline-stdin-full.json" > "$FIX_PCT"
+  err=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_PCT" 2>&1 >/dev/null)
+  l1=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_PCT" 2>/dev/null | head -n 1)
+  printf '%s' "$l1" | grep -qF '100% turbo' \
+    && ok "percent in display_name renders literally on line 1" \
+    || bad "percent in display_name renders literally on line 1" "line1: $l1"
+  [ -z "$err" ] && ok "percent in display_name: stderr silent" \
+    || bad "percent in display_name: stderr silent" "stderr: $err"
+fi
+
+# ─── fork-budget pins (the statusline renders on every CC event) ──────────
+if [ -f "$SL" ]; then
+  slcode=$(grep -v '^[[:space:]]*#' "$SL")
+  n=$(printf '%s\n' "$slcode" | grep -c 'date +%s')
+  [ "$n" = "1" ] && ok "exactly one date +%s fork per render (got $n)" \
+    || bad "exactly one date +%s fork per render" "got $n"
+  n=$(printf '%s\n' "$slcode" | grep -c 'git -C "$project_dir" diff')
+  [ "$n" = "1" ] && ok "one git-diff fork (shortstat doubles as the dirty probe)" \
+    || bad "one git-diff fork (shortstat doubles as the dirty probe)" "got $n"
+  printf '%s\n' "$slcode" | grep -q 'cat "[^"]*vibeCodingMethod" *|' \
+    && bad "vibe read: tr reads the file directly (no cat| pipeline)" "cat pipeline present" \
+    || ok "vibe read: tr reads the file directly (no cat| pipeline)"
+  printf '%s\n' "$slcode" | grep -q 'echo "$input" *| *jq' \
+    && bad "stdin extraction: printf|jq, not echo|jq" "echo pipeline present" \
+    || ok "stdin extraction: printf|jq, not echo|jq"
+fi
+
+# ─── gradient math single-source in the renderer ───────────────────────────
+# mp_gradient_color had ZERO production callers while mp_sparkline_render
+# inlined IDENTICAL interpolation math — a drift trap (fix one, forget the
+# other). Both awk programs must embed the shared MP_AWK_GRAD function
+# body, leaving exactly one copy of the interpolation expression.
+if [ -f "$RENDER" ]; then
+  n=$(grep -cE 'sr\[[ij]\+1\] - sr\[[ij]\]' "$RENDER")
+  [ "$n" = "1" ] && ok "gradient interpolation math defined exactly once (got $n)" \
+    || bad "gradient interpolation math defined exactly once" "got $n"
+  n=$(grep -c 'MP_AWK_GRAD' "$RENDER")
+  [ "$n" -ge 3 ] && ok "MP_AWK_GRAD shared: definition + both embeds (got $n)" \
+    || bad "MP_AWK_GRAD shared: definition + both embeds" "got $n"
+  # Value parity: a mid-scale sparkline bar's color must equal
+  # mp_gradient_color at the same ratio ("1 2" → bar 1 ratio 0.5).
+  mid=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_gradient_color 0.5' \
+    _ "$HOOKS/_lib.sh" "$THEME" "$ICONS" "$RENDER")
+  spark=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && . "$4" && mp_sparkline_render "1 2"' \
+    _ "$HOOKS/_lib.sh" "$THEME" "$ICONS" "$RENDER")
+  printf '%s' "$spark" | grep -qF "38;2;$(printf '%s' "$mid" | tr ' ' ';')m" \
+    && ok "sparkline mid-bar color == mp_gradient_color 0.5 (value parity)" \
+    || bad "sparkline mid-bar color == mp_gradient_color 0.5 (value parity)" "mid=$mid"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

@@ -26,43 +26,51 @@ mp_pill_fg() {
   }'
 }
 
+# MP_AWK_GRAD: the ONE copy of the gradient interpolation, embedded in both
+# mp_gradient_color's and mp_sparkline_render's awk programs (the sparkline
+# used to inline an identical copy — a drift trap). grad_init parses
+# THEME_GRAD_STOPS into the st/sr/sg/sb globals and returns the stop count;
+# grad_rgb returns "R G B" for a ratio t clamped to [0,1]. The final return
+# is unreachable for well-formed sorted stops [0,1]; it guards malformed
+# input (unsorted, or a sparse range like 0.2→0.9 leaving a hole) with the
+# last stop rather than empty output.
+MP_AWK_GRAD='
+  function grad_init(stops,   n, i, kv, rgb, parts) {
+    n = split(stops, parts, " ")
+    for (i = 1; i <= n; i++) {
+      split(parts[i], kv, ":")
+      st[i] = kv[1] + 0
+      split(kv[2], rgb, ",")
+      sr[i] = rgb[1] + 0
+      sg[i] = rgb[2] + 0
+      sb[i] = rgb[3] + 0
+    }
+    return n
+  }
+  function grad_rgb(t, ns,   i, span, u, r, g, b) {
+    if (t <= 0) return sr[1] " " sg[1] " " sb[1]
+    if (t >= 1) return sr[ns] " " sg[ns] " " sb[ns]
+    for (i = 1; i < ns; i++) {
+      if (t >= st[i] && t <= st[i+1]) {
+        span = st[i+1] - st[i]
+        u    = (span > 0) ? (t - st[i]) / span : 0
+        r    = int(sr[i] + (sr[i+1] - sr[i]) * u + 0.5)
+        g    = int(sg[i] + (sg[i+1] - sg[i]) * u + 0.5)
+        b    = int(sb[i] + (sb[i+1] - sb[i]) * u + 0.5)
+        return r " " g " " b
+      }
+    }
+    return sr[ns] " " sg[ns] " " sb[ns]
+  }
+'
+
 # mp_gradient_color: given a ratio t ∈ [0,1], interpolate THEME_GRAD_STOPS
 # linearly between the two flanking stops and print "R G B". Clamps t to
 # [0,1]. Stops format: "<t>:R,G,B <t>:R,G,B …" sorted ascending by t.
 mp_gradient_color() {
-  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" '
-    BEGIN {
-      n = split(stops, parts, " ")
-      for (i = 1; i <= n; i++) {
-        split(parts[i], kv, ":")
-        st[i] = kv[1] + 0
-        split(kv[2], rgb, ",")
-        sr[i] = rgb[1] + 0
-        sg[i] = rgb[2] + 0
-        sb[i] = rgb[3] + 0
-      }
-      nstops = n
-    }
-    {
-      t = $1 + 0
-      if (t <= 0)      { printf "%d %d %d", sr[1], sg[1], sb[1]; exit }
-      if (t >= 1)      { printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]; exit }
-      for (i = 1; i < nstops; i++) {
-        if (t >= st[i] && t <= st[i+1]) {
-          span = st[i+1] - st[i]
-          u    = (span > 0) ? (t - st[i]) / span : 0
-          r    = int(sr[i] + (sr[i+1] - sr[i]) * u + 0.5)
-          g    = int(sg[i] + (sg[i+1] - sg[i]) * u + 0.5)
-          b    = int(sb[i] + (sb[i+1] - sb[i]) * u + 0.5)
-          printf "%d %d %d", r, g, b
-          exit
-        }
-      }
-      # Unreachable for well-formed sorted stops [0,1]; guards malformed input
-      # (unsorted, or sparse range like 0.2→0.9 leaving a hole). Emits last
-      # stop as a safe-ish fallback rather than empty output.
-      printf "%d %d %d", sr[nstops], sg[nstops], sb[nstops]
-    }'
+  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" "$MP_AWK_GRAD"'
+    BEGIN { nstops = grad_init(stops) }
+    { printf "%s", grad_rgb($1 + 0, nstops) }'
 }
 
 # mp_sparkline_data: read a token-rate log (<epoch> <sid> <cum_tokens>),
@@ -102,17 +110,11 @@ mp_sparkline_data() {
 # bar's height is scaled against the max delta in the list; each bar's color
 # comes from mp_gradient_color at the same ratio. Empty input → empty out.
 mp_sparkline_render() {
-  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" '
+  printf '%s\n' "$1" | awk -v stops="$THEME_GRAD_STOPS" "$MP_AWK_GRAD"'
     BEGIN {
       glyph[1] = "▁"; glyph[2] = "▂"; glyph[3] = "▃"; glyph[4] = "▄"
       glyph[5] = "▅"; glyph[6] = "▆"; glyph[7] = "▇"; glyph[8] = "█"
-      ns = split(stops, parts, " ")
-      for (i = 1; i <= ns; i++) {
-        split(parts[i], kv, ":")
-        st[i] = kv[1] + 0
-        split(kv[2], rgb, ",")
-        sr[i] = rgb[1] + 0; sg[i] = rgb[2] + 0; sb[i] = rgb[3] + 0
-      }
+      ns = grad_init(stops)
     }
     {
       n = NF
@@ -127,23 +129,10 @@ mp_sparkline_render() {
         idx = int(ratio * 7) + 1
         if (idx > 8) idx = 8
         if (idx < 1) idx = 1
-        # Gradient color at the same ratio.
-        r = sr[ns]; g = sg[ns]; b = sb[ns]
-        if (ratio <= 0)      { r = sr[1];  g = sg[1];  b = sb[1] }
-        else if (ratio >= 1) { r = sr[ns]; g = sg[ns]; b = sb[ns] }
-        else {
-          for (j = 1; j < ns; j++) {
-            if (ratio >= st[j] && ratio <= st[j+1]) {
-              span = st[j+1] - st[j]
-              u    = (span > 0) ? (ratio - st[j]) / span : 0
-              r    = int(sr[j] + (sr[j+1] - sr[j]) * u + 0.5)
-              g    = int(sg[j] + (sg[j+1] - sg[j]) * u + 0.5)
-              b    = int(sb[j] + (sb[j+1] - sb[j]) * u + 0.5)
-              break
-            }
-          }
-        }
-        out = out sprintf("\033[38;2;%d;%d;%dm%s\033[0m", r, g, b, glyph[idx])
+        # Gradient color at the same ratio — the SHARED grad_rgb, so the
+        # sparkline can never drift from mp_gradient_color.
+        split(grad_rgb(ratio, ns), c, " ")
+        out = out sprintf("\033[38;2;%d;%d;%dm%s\033[0m", c[1], c[2], c[3], glyph[idx])
       }
       print out
     }

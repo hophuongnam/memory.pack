@@ -200,7 +200,7 @@ SID3="test-slug-anchor-2222"
 TRANSCRIPT3="$TRANSCRIPT_DIR/$SID3.jsonl"
 : > "$TRANSCRIPT3"
 SL_STDIN="$(printf '{"session_id":"%s","transcript_path":"%s","workspace":{"project_dir":"%s"},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID3" "$TRANSCRIPT3" "$SUB_REAL")"
-SL_OUT="$(printf '%s' "$SL_STDIN" | "$SL_LINK" 2>/dev/null || true)"
+SL_OUT="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 
 case "$SL_OUT" in
   *"⏭skip-replay"*) ok "statusline ⏭skip-replay parity (transcript anchors hash to PARENT)" ;;
@@ -212,13 +212,13 @@ esac
 # matters (cwd-based logic would still resolve here because workspace=SUB).
 # Both sentinels present → the PARENT one is what statusline must look at.
 : > "$SL_PREFIX/hooks/.skip-replay-${SUB_HASH}"
-SL_OUT2="$(printf '%s' "$SL_STDIN" | "$SL_LINK" 2>/dev/null || true)"
+SL_OUT2="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 # We can't directly tell which sentinel triggered the indicator, so prove
 # parity by REMOVING the PARENT sentinel and keeping only SUB — the
 # correct resolver should now NOT render the indicator, because hooks
 # would never have written a SUB-hash sentinel.
 rm -f "$SL_PREFIX/hooks/.skip-replay-${PARENT_HASH}"
-SL_OUT3="$(printf '%s' "$SL_STDIN" | "$SL_LINK" 2>/dev/null || true)"
+SL_OUT3="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 case "$SL_OUT3" in
   *"⏭skip-replay"*)
     bad "statusline does NOT honor a SUB-hash-only sentinel (parity check)" \
@@ -241,7 +241,7 @@ printf '%s\n' 1 2 3 4 5 6 7 8 9 10 > "$TRANSCRIPT_DIR/memory/MEMORY.md"
 
 # Real bug shape: workspace EMPTY, cwd in subfolder, transcript at PARENT.
 SL_STDIN4="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","workspace":{},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID4" "$TRANSCRIPT4" "$SUB_REAL")"
-SL_OUT4="$(printf '%s' "$SL_STDIN4" | HOME="$FAKE_HOME" "$SL_LINK" 2>/dev/null || true)"
+SL_OUT4="$(printf '%s' "$SL_STDIN4" | HOME="$FAKE_HOME" MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 case "$SL_OUT4" in
   *"10/150"*) ok "statusline mem indicator resolves store via transcript anchor (project_dir empty, cwd=subfolder)" ;;
   *) bad "statusline mem indicator resolves store via transcript anchor (project_dir empty, cwd=subfolder)" \
@@ -260,7 +260,7 @@ SID5="test-slug-anchor-4444"
 TRANSCRIPT5="$TRANSCRIPT_DIR_U/$SID5.jsonl"
 : > "$TRANSCRIPT5"
 SL_STDIN5="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID5" "$TRANSCRIPT5" "$PARENT_U" "$PARENT_U")"
-SL_OUT5="$(printf '%s' "$SL_STDIN5" | HOME="$FAKE_HOME" "$SL_LINK" 2>/dev/null || true)"
+SL_OUT5="$(printf '%s' "$SL_STDIN5" | HOME="$FAKE_HOME" MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 case "$SL_OUT5" in
   *"12/150"*) ok "statusline mem indicator uses engine slug encoding (underscore path)" ;;
   *) bad "statusline mem indicator uses engine slug encoding (underscore path)" \
