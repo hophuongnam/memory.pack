@@ -16,44 +16,65 @@ const SDK_PKG = '@anthropic-ai/claude-agent-sdk/sdk.mjs';
 // a column-0-keys-only map, silently DELETING nested children; these
 // helpers exist so no second parser can drift like that again.
 //
-// fmParse(text) → { lines, keys, rest } | null
-//   lines: frontmatter lines verbatim (no '---' fences)
-//   keys:  Map of key → raw value, leading-whitespace-tolerant; on
-//          duplicate keys the LAST occurrence wins (update-recall's
-//          long-standing behavior)
+// fmParse(text) → { lines, keys, rest, eol } | null
+//   lines: frontmatter lines verbatim (no '---' fences; CRLF files keep
+//          each line's trailing \r — lines are never reshaped)
+//   keys:  Map of key → value, leading-whitespace-tolerant, trailing-\r
+//          stripped on the VALUE read only; on duplicate keys the LAST
+//          occurrence wins (and fmSetInPlace writes the LAST — read/write
+//          must target the same line or counters freeze)
 //   rest:  body after the closing fence
+//   eol:   fence line ending ('\n' or '\r\n') — pass to fmSerialize for a
+//          byte-identical round-trip
 //   null when the text has no well-formed frontmatter block.
+// Empty frontmatter (`---\n---\n`) parses as lines=[] — the close-fence
+// search starts at index 3 so the IMMEDIATE fence wins over a later body
+// `---` hr (searching from 4 spliced recall counters into the body).
 export function fmParse(text) {
-  if (typeof text !== 'string' || !text.startsWith('---\n')) return null;
-  const end = text.indexOf('\n---\n', 4);
+  if (typeof text !== 'string') return null;
+  let open, eol;
+  if (text.startsWith('---\n')) { open = 4; eol = '\n'; }
+  else if (text.startsWith('---\r\n')) { open = 5; eol = '\r\n'; }
+  else return null;
+  const closePat = `\n---${eol}`;
+  const end = text.indexOf(closePat, open - 1);
   if (end < 0) return null;
-  const lines = text.slice(4, end).split('\n');
-  const rest = text.slice(end + 5);
+  const lines = end === open - 1 ? [] : text.slice(open, end).split('\n');
+  const rest = text.slice(end + closePat.length);
   const keys = new Map();
   for (const line of lines) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    // Strip the trailing \r from a COPY before matching: JS `.` treats \r
+    // as a line terminator and `$` anchors only at true end-of-string, so
+    // `(.*)$` never matches a CRLF line at all. `lines` stays verbatim.
+    const m = line.replace(/\r$/, '').match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
     if (m) keys.set(m[1], m[2]);
   }
-  return { lines, keys, rest };
+  return { lines, keys, rest, eol };
 }
 
-// fmSetInPlace(lines, key, value): rewrite ONLY the first line carrying
-// `key`, preserving its existing indentation; append at column 0 when the
-// key is absent. Mutates `lines` in place.
+// fmSetInPlace(lines, key, value): rewrite ONLY the LAST line carrying
+// `key` (fmParse reads the last occurrence — writing any other line would
+// freeze the value), preserving its existing indentation and trailing \r;
+// append at column 0 when the key is absent. Mutates `lines` in place.
 export function fmSetInPlace(lines, key, value) {
+  let hit = -1;
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*.*$/);
-    if (m && m[2] === key) {
-      lines[i] = `${m[1]}${key}: ${value}`;
-      return;
-    }
+    const m = lines[i].match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*):/);
+    if (m && m[2] === key) hit = i;
+  }
+  if (hit >= 0) {
+    const indent = lines[hit].match(/^(\s*)/)[1];
+    const cr = lines[hit].endsWith('\r') ? '\r' : '';
+    lines[hit] = `${indent}${key}: ${value}${cr}`;
+    return;
   }
   lines.push(`${key}: ${value}`);
 }
 
-// fmSerialize(lines, rest): reassemble exactly what fmParse split.
-export function fmSerialize(lines, rest) {
-  return `---\n${lines.join('\n')}\n---\n${rest}`;
+// fmSerialize(lines, rest, eol): reassemble exactly what fmParse split.
+export function fmSerialize(lines, rest, eol = '\n') {
+  if (lines.length === 0) return `---${eol}---${eol}${rest}`;
+  return `---${eol}${lines.join('\n')}\n---${eol}${rest}`;
 }
 
 // extractConversation: flatten CC session messages into "USER:/ASSISTANT:"

@@ -60,7 +60,7 @@ try {
 // via `k.strip()`, so `type` resolves from any shape regardless of this hook.
 const fm = fmParse(body);
 if (!fm) process.exit(0);
-const { lines, keys, rest } = fm;
+const { lines, keys, rest, eol } = fm;
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -75,7 +75,7 @@ const newCount = alreadyBumpedThisSession ? prevCount : prevCount + 1;
 fmSetInPlace(lines, 'recall_count', String(newCount));
 fmSetInPlace(lines, 'last_recalled', today);
 
-const out = fmSerialize(lines, rest);
+const out = fmSerialize(lines, rest, eol);
 
 // ponytail: byte-identical re-read → skip the write entirely. A tmp+rename
 // changes the inode/ctime even when the bytes don't, which busts the Edit
@@ -97,14 +97,24 @@ if (out === body) process.exit(0);
 // recall bump rewrites content + changes ctime via the rename. The
 // Bash+Python workaround in feedback_memory_edit_recall_race.md is what
 // actually sidesteps Edit; see that memory for details.)
-const tmp = `${memoryPath}.recall.tmp`;
-writeFileSync(tmp, out);
+// pid-suffixed tmp: two concurrent Reads (two sessions) on a fixed name
+// raced — the loser's renameSync threw ENOENT before its session marker
+// was written, so that session's next Read double-bumped. On failure,
+// clean the tmp and bail with the file untouched (no bump = no marker =
+// honest retry next Read). Mirrors archive-resurrect.mjs's write idiom.
+const tmp = `${memoryPath}.recall.tmp.${process.pid}`;
 try {
-  utimesSync(tmp, origStat.atime, origStat.mtime);
+  writeFileSync(tmp, out);
+  try {
+    utimesSync(tmp, origStat.atime, origStat.mtime);
+  } catch {
+    // non-fatal
+  }
+  renameSync(tmp, memoryPath);
 } catch {
-  // non-fatal
+  try { unlinkSync(tmp); } catch {}
+  process.exit(0);
 }
-renameSync(tmp, memoryPath);
 
 if (sessionId && !alreadyBumpedThisSession) {
   try {
@@ -121,7 +131,10 @@ if (sessionId && !alreadyBumpedThisSession) {
 // because the schema doesn't track an `archived_at_recall_count` field —
 // see SCHEMA.md "Auto-promote on recall threshold". Defensive throughout:
 // any failure leaves the recall bump intact and the file in archive.
-const PROMOTION_THRESHOLD = parseInt(process.env.MEMORY_PROMOTION_THRESHOLD || '3', 10);
+// Number.isFinite guard: a garbage env value parses to NaN and
+// `newCount >= NaN` is false forever — promotion silently OFF.
+const rawThreshold = parseInt(process.env.MEMORY_PROMOTION_THRESHOLD || '', 10);
+const PROMOTION_THRESHOLD = Number.isFinite(rawThreshold) ? rawThreshold : 3;
 const isArchived = memoryPath.includes('/memory/archive/');
 if (isArchived && newCount >= PROMOTION_THRESHOLD) {
   try {
@@ -134,16 +147,24 @@ if (isArchived && newCount >= PROMOTION_THRESHOLD) {
   }
 }
 
+function memoryRootOf(archivePath) {
+  // The ACTIVE memory root for any path under memory/archive/, including
+  // nested archive/sub/ layouts (dirname+strip mispathed those: promote
+  // target landed in memory/sub/ (ENOENT) and the error log inside
+  // archive/sub/). Falls back to dirname-strip for defensive callers.
+  const i = archivePath.indexOf('/memory/archive/');
+  if (i >= 0) return archivePath.slice(0, i + '/memory'.length);
+  return dirname(archivePath).replace(/\/archive$/, '');
+}
+
 function archivePromoteLog(memoryPath) {
-  // Log lives at <active-dir>/.archive-promote.log alongside the existing
-  // .archive-resurrect.log, regardless of whether the path is currently
-  // inside archive/ or already promoted out.
-  const activeDir = dirname(memoryPath).replace(/\/archive$/, '');
-  return join(activeDir, '.archive-promote.log');
+  // Log lives at <memory-root>/.archive-promote.log alongside the existing
+  // .archive-resurrect.log, regardless of how deep the archive path is.
+  return join(memoryRootOf(memoryPath), '.archive-promote.log');
 }
 
 function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
-  const activePath = archivePath.replace('/memory/archive/', '/memory/');
+  const activePath = join(memoryRootOf(archivePath), basename(archivePath));
   const log = archivePromoteLog(archivePath);
   const stamp = new Date().toISOString();
 

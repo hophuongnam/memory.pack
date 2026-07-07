@@ -22,8 +22,14 @@ const { getSessionMessages, query } = await import(resolveSdkSpecifier());
 
 // Exit codes:
 //   0 = success (boot context written to stdout)
-//   2 = benign no-op (nothing to replay — not a failure)
-//   3 = real failure (SDK error, empty result, thrown exception)
+//   2 = benign no-op (no session id on argv — nothing to replay)
+//   3 = real failure (SDK error, empty messages/transcript, empty result,
+//       thrown exception). Empty messages/transcript are REAL failures,
+//       not benign: a session only reaches replay.mjs after passing
+//       session-end's substance gate, which counted real turns from this
+//       same transcript — the SDK seeing nothing means SDK/extraction
+//       drift. Exit 2 would delete the error log and carry forward
+//       quietly, so the failure would recur invisibly forever.
 // session-end.sh reads the exit code to decide whether to surface a synthetic
 // error boot-context and the "Replay failed" notification. Always write a
 // one-line reason to stderr on every non-success path so /tmp/replay-error.log
@@ -51,7 +57,7 @@ if (!sessionId) {
 // Read previous session messages
 const msgs = await getSessionMessages(sessionId, { cwd });
 if (!msgs || msgs.length === 0) {
-  bail(2, `getSessionMessages returned empty for session ${sessionId}`);
+  bail(3, `getSessionMessages returned empty for session ${sessionId} — the session passed the substance gate, so this is SDK/lookup drift, not a benign no-op`);
 }
 
 // Extract user/assistant text (shared, isMeta/tool_result-aware — see
@@ -61,7 +67,7 @@ if (!msgs || msgs.length === 0) {
 // truncated transcript.
 const transcript = truncateConversation(extractConversation(msgs));
 if (!transcript.trim()) {
-  bail(2, `transcript had ${msgs.length} raw messages but no user/assistant text — likely all tool calls`);
+  bail(3, `transcript had ${msgs.length} raw messages but no user/assistant text — the substance gate counted real turns, so extraction drift, not a benign no-op`);
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -316,8 +322,12 @@ Not a memory file — \`memory-lint\` ignores this path.
       try { existing = await fs.readFile(pendingPath, 'utf8'); } catch {}
 
       const block = `\n## Proposals from session ${sessionId} — ${now}\n\n${promotionResult}\n`;
+      // Append-only (O_APPEND) on BOTH branches: the exists-check is a
+      // check-then-act race between two same-project session-ends — a
+      // writeFile here clobbered the other replay's proposals. Appending
+      // header+block worst-cases as a duplicated header, never lost data.
       if (!existing) {
-        await fs.writeFile(pendingPath, header + block);
+        await fs.appendFile(pendingPath, header + block);
       } else {
         await fs.appendFile(pendingPath, block);
       }
@@ -326,7 +336,12 @@ Not a memory file — \`memory-lint\` ignores this path.
     }
   }
 } catch (err) {
-  process.stderr.write(`[replay] promotion pass failed: ${err?.message || err}\n`);
+  const msg = err?.message || String(err);
+  process.stderr.write(`[replay] promotion pass failed: ${msg}\n`);
+  // Self-report into boot-context stdout: session-end.sh deletes ERR_LOG on
+  // exit 0, so a stderr-only failure here leaves the proposals subsystem
+  // dead with zero surface anywhere a human or next session would look.
+  promotionSummary = `PENDING_MEMORIES: promotion pass FAILED (${msg}) — proposals from this session were not saved.`;
 }
 
 // ───────────────────────────────────────────────────────────────────────

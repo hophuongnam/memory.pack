@@ -82,7 +82,7 @@ if (archivedCreated) fmSetInPlace(newFm.lines, 'created', archivedCreated);
 if (archivedRecallCount) fmSetInPlace(newFm.lines, 'recall_count', archivedRecallCount);
 fmSetInPlace(newFm.lines, 'last_reviewed', today);
 
-const out = fmSerialize(newFm.lines, newFm.rest);
+const out = fmSerialize(newFm.lines, newFm.rest, newFm.eol);
 
 // Atomic write: tmp + rename.
 const tmp = `${memoryPath}.resurrect.tmp`;

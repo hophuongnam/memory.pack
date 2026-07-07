@@ -21,6 +21,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from 'node
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fmParse, fmSetInPlace, fmSerialize } from '../hooks/_lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RECALL = join(HERE, '..', 'hooks', 'update-recall.mjs');
@@ -111,6 +112,123 @@ const flattened = '---\nname: x\nmetadata:\ntype: project\n---\nbody\n';
   execFileSync('node', [RECALL, path, sid], { encoding: 'utf8' }); // 2nd read: must be a no-op
   eq('re-read: content byte-identical', afterFirst, readFileSync(path, 'utf8'));
   eq('re-read: inode unchanged (file not rewritten)', inoFirst, statSync(path).ino);
+}
+
+// === _lib.mjs frontmatter-helper unit contract (memory-file integrity) ===
+// fmParse must tolerate empty frontmatter and CRLF fences; duplicate keys
+// must be read AND written at the LAST occurrence; parse→serialize must be
+// a byte-identical round-trip on every tolerated shape. RED until _lib.mjs
+// searches the close fence from index 3, learns `eol`, and fmSetInPlace
+// rewrites the last match.
+{
+  // Empty frontmatter `---\n---\n` + a later body hr: the close fence is
+  // the IMMEDIATE one, not the body hr (the body-splice bug: indexOf
+  // started at 4 and skipped the adjacent close).
+  const emptyFm = '---\n---\nSome note.\n\n---\n\nMore.\n';
+  const p = fmParse(emptyFm);
+  if (!p) bad('unit: empty frontmatter parses', 'object', 'null');
+  else {
+    eq('unit: empty frontmatter → zero fm lines', 0, p.lines.length);
+    eq('unit: empty frontmatter → body starts after immediate fence',
+       'Some note.\n\n---\n\nMore.\n', p.rest);
+    eq('unit: empty frontmatter round-trips byte-stable',
+       emptyFm, fmSerialize(p.lines, p.rest, p.eol));
+  }
+
+  // CRLF fences: parse must not return null; lines stay verbatim (\r kept);
+  // VALUE reads are \r-stripped; round-trip byte-identical.
+  const crlf = '---\r\nname: x\r\ntype: feedback\r\n---\r\nbody\r\n';
+  const c = fmParse(crlf);
+  if (!c) bad('unit: CRLF frontmatter parses', 'object', 'null');
+  else {
+    eq('unit: CRLF value read is \\r-stripped', 'feedback', c.keys.get('type'));
+    eq('unit: CRLF lines stay verbatim', 'name: x\r', c.lines[0]);
+    eq('unit: CRLF round-trips byte-stable', crlf, fmSerialize(c.lines, c.rest, c.eol));
+  }
+
+  // CRLF + empty frontmatter combined.
+  const crlfEmpty = '---\r\n---\r\nB\r\n';
+  const ce = fmParse(crlfEmpty);
+  if (!ce) bad('unit: CRLF empty frontmatter parses', 'object', 'null');
+  else eq('unit: CRLF empty frontmatter round-trips byte-stable',
+          crlfEmpty, fmSerialize(ce.lines, ce.rest, ce.eol));
+
+  // LF default: the old two-arg fmSerialize call shape must keep working.
+  const lf = '---\nk: v\n---\nb\n';
+  const l = fmParse(lf);
+  eq('unit: LF round-trip with eol omitted stays byte-stable',
+     lf, fmSerialize(l.lines, l.rest));
+
+  // Duplicate key: read takes the LAST occurrence (long-standing) and
+  // fmSetInPlace must WRITE the last occurrence too, else the counter
+  // freezes (read 7 → write first line → read 7 again forever).
+  const d = fmParse('---\na: 1\na: 2\n---\n');
+  eq('unit: dup-key read takes last occurrence', '2', d.keys.get('a'));
+  fmSetInPlace(d.lines, 'a', '9');
+  eq('unit: dup-key write leaves first occurrence verbatim', 'a: 1', d.lines[0]);
+  eq('unit: dup-key write rewrites the LAST occurrence', 'a: 9', d.lines[1]);
+
+  // fmSetInPlace on a CRLF line preserves the trailing \r.
+  const crLines = ['recall_count: 1\r'];
+  fmSetInPlace(crLines, 'recall_count', '2');
+  eq('unit: fmSetInPlace preserves trailing \\r', 'recall_count: 2\r', crLines[0]);
+}
+
+// === empty-frontmatter file: counters must land IN frontmatter, not body ===
+// RED: fmParse treated the body hr as the close fence, so the recall
+// counters got SPLICED INTO THE BODY between "Some note." and the hr.
+{
+  const path = join(tmp, 'emptyfm.md');
+  writeFileSync(path, '---\n---\nSome note.\n\n---\n\nMore.\n');
+  execFileSync('node', [RECALL, path, 'sid-emptyfm'], { encoding: 'utf8' });
+  eq('emptyfm: counters in frontmatter, body byte-preserved',
+     `---\nrecall_count: 1\nlast_recalled: ${today}\n---\nSome note.\n\n---\n\nMore.\n`,
+     readFileSync(path, 'utf8'));
+}
+
+// === CRLF file: hook must bump (not silently no-op) and preserve CRLF ===
+// RED: fmParse returned null on `---\r\n` → recall tracking silently dead
+// for any CRLF memory file (appended counter lines are LF; that's fine —
+// existing bytes are what must never reshape).
+{
+  const path = join(tmp, 'crlf.md');
+  writeFileSync(path, '---\r\nname: crlf\r\ntype: feedback\r\n---\r\nbody one\r\nbody two\r\n');
+  execFileSync('node', [RECALL, path, 'sid-crlf'], { encoding: 'utf8' });
+  eq('crlf: counters bumped, fences + lines + body stay CRLF-verbatim',
+     `---\r\nname: crlf\r\ntype: feedback\r\nrecall_count: 1\nlast_recalled: ${today}\n---\r\nbody one\r\nbody two\r\n`,
+     readFileSync(path, 'utf8'));
+}
+
+// === duplicate recall_count: counter must PROGRESS across sessions ===
+// RED: read took the LAST occurrence but the write went to the FIRST →
+// the live (last) line never changed → count frozen at its old value.
+{
+  const path = join(tmp, 'dup.md');
+  writeFileSync(path, '---\nname: dup\nrecall_count: 4\ntype: feedback\nrecall_count: 7\n---\nbody\n');
+  execFileSync('node', [RECALL, path, 'sid-dup1'], { encoding: 'utf8' });
+  execFileSync('node', [RECALL, path, 'sid-dup2'], { encoding: 'utf8' });
+  const out = readFileSync(path, 'utf8');
+  has('dup: first occurrence left verbatim', out, '\nrecall_count: 4\n');
+  has('dup: last occurrence progressed 7→8→9', out, '\nrecall_count: 9\n');
+  (!out.includes('recall_count: 8'))
+    ? ok('dup: no frozen intermediate value')
+    : bad('dup: no frozen intermediate value', 'no recall_count: 8', 'found one');
+}
+
+// === structural: atomic-write tmp must be pid-unique + failure-cleaned ===
+// Two concurrent Reads of the same memory (two sessions) share a fixed
+// `.recall.tmp` name: the loser's renameSync throws ENOENT, the hook dies
+// before writing its session marker → that session's NEXT Read double-bumps
+// recall_count. Pin the pid-suffixed tmp and the unlink-on-fail cleanup
+// (mirrors archive-resurrect.mjs's write idiom).
+{
+  const src = readFileSync(RECALL, 'utf8');
+  has('recall src: tmp name is pid-suffixed', src, '.recall.tmp.${process.pid}');
+  has('recall src: failed write unlinks its tmp', src, 'unlinkSync(tmp)');
+  /try\s*\{\s*writeFileSync\(tmp, out\)/.test(src)
+    ? ok('recall src: write+rename wrapped in try/catch')
+    : bad('recall src: write+rename wrapped in try/catch',
+          'try { writeFileSync(tmp, out)', 'absent');
 }
 
 rmSync(tmp, { recursive: true, force: true });
