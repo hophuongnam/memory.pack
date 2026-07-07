@@ -71,7 +71,7 @@ Default output per hit:
 
 After getting hits, decide which files actually warrant a `Read`:
 - The `desc` line is the frontmatter `description:` — a one-line relevance hook by design (per `SCHEMA.md`). If the description doesn't address what you're looking for, skip the Read.
-- Reading an archived memory does **not** auto-resurrect it (resurrection is filename-collision only, on Write). If you want to promote a useful archived memory back to active, the user has to confirm — surface the path and ask.
+- Reading an archived memory bumps its `recall_count`; on the third distinct session that Reads it, `update-recall.mjs` auto-promotes it back to active (see the promotion note above) — no user confirmation involved. Write-time *resurrection* is the separate filename-collision path. So: just Read the archived hit if it's useful; promotion takes care of itself.
 
 ## Examples
 

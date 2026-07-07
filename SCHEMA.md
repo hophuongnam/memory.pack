@@ -19,7 +19,7 @@ The stock system prompt's `metadata: { type: ... }` nested wrapper is **tolerate
 - Filenames: `<type>_<short_slug>.md`. Lowercase, underscores, no dates.
 - One memory per file. Never inline multiple memories.
 - `MEMORY.md` entries are one line each, under 150 chars: `- YYYY-MM-DD [file](file) — one-line hook`.
-- There is **no per-project `SCHEMA.md`** — the canonical schema lives at `~/Resilio.Sync/Memory.Pack/SCHEMA.md` and applies to every project.
+- There is **no per-project `SCHEMA.md`** — the canonical schema lives at `$MEMORY_PACK_HOME/SCHEMA.md` (the engine checkout; `~/Resilio.Sync/Memory.Pack` on the original host) and applies to every project.
 
 ## Frontmatter contract
 
@@ -100,7 +100,7 @@ The archive is not a graveyard — it is a recurrence detector. `Memory.Pack/hoo
 
 **Exact-slug match only.** Paraphrased slugs (e.g. archived `feedback_sqlite_wal.md` vs new `feedback_sqlite_wal_required.md`) are intentionally not caught. False positives — silently destroying a valid new memory by inheriting wrong metadata — would be worse than false negatives, which the user can fix manually with `mv archive/<file> ./` and an Edit.
 
-**Why no body merge.** The new write is, by construction, Claude's current understanding. The archived body is by definition stale (it crossed `strength < 0.1` to be archived). Auto-merging risks re-introducing contradicted information; letting the new body win is honest about which version is canonical now. The recurrence signal lives in the metadata, not the prose.
+**Why no body merge.** The new write is, by construction, Claude's current understanding. The archived body is by definition stale (it was archived by byte-cap eviction or an explicit lint/manual decision, and a newer write now exists). Auto-merging risks re-introducing contradicted information; letting the new body win is honest about which version is canonical now. The recurrence signal lives in the metadata, not the prose.
 
 **Interaction with `/memory-lint --decay`.** A resurrected memory looks like a high-strength memory with an old `created` date — exactly the right shape. The strength formula already handles it: `Δt` is anchored to `last_reviewed` (today), so strength resets to ~1; `recall_count` carries over and continues to flatten the future decay curve.
 
@@ -126,7 +126,7 @@ Archive is also not a one-way gate. `Memory.Pack/hooks/update-recall.mjs` (backg
 
 ## Indexed non-memory artifacts
 
-The FTS5 search index at `Memory.Pack/index/search.db` (covered separately by the search infrastructure docs) intentionally indexes `sessions.log.md` files in addition to canonical memory files. Sessions logs have **no real frontmatter** — `index/index-memories.py` synthesizes metadata for them (`type: session`, `name: "Session log — <project slug>"`, `description: "Append-only replay summaries…"`) so they participate in search uniformly. Use `--type session` (or `--type !=session` patterns) on the search CLI to filter them in or out. They surface narrative continuity that never got promoted to a memory — useful for cross-session topic recall, less useful for "what's the rule for X" lookups.
+The FTS5 search index at `Memory.Pack/index/search.db` (covered separately by the search infrastructure docs) intentionally indexes `sessions.log.md` files in addition to canonical memory files. Sessions logs have **no real frontmatter** — `index/index-memories.py` synthesizes metadata for them (`type: session`, `name: "Session log — <project slug>"`, `description: "Append-only replay summaries…"`) so they participate in search uniformly. Use `--type session` on the search CLI to filter them in; to filter them OUT use `--json` piped through `jq 'map(select(.type != "session"))'` — the CLI's `--type` is equality-only. They surface narrative continuity that never got promoted to a memory — useful for cross-session topic recall, less useful for "what's the rule for X" lookups.
 
 ## Types
 
@@ -188,8 +188,8 @@ Rationale: reduces duplication, surfaces related memories when one is loaded, an
   - `## Projects`
   - `## Infrastructure & reference`
 - Each entry: `- YYYY-MM-DD [file](file) — one-line hook`
-- When `MEMORY.md` approaches 150 lines, evict by **lowest decay strength first** (see the decay model below), not by date. A 2024 reference memory with many recalls outranks last week's unused project memory. `/memory-lint --decay` surfaces the weakest candidates for per-item archive/delete under the same reinforce/edit/archive/delete flow it uses in audit mode; the index cap is just another trigger for that flow. Memories without decay-tracking fields fall back to mtime as their Δt, so legacy memories still rank.
-- Start `MEMORY.md` with a pointer line: `` See `~/Resilio.Sync/Memory.Pack/SCHEMA.md` for the canonical contract. Shared across all projects. `` (use a code span, not a markdown link — the tilde won't resolve in `[text](~/…)` form).
+- When `MEMORY.md` approaches 150 lines, evict **FIFO (oldest `created` first) and by topic-overlap** (entries superseded by or duplicative of a newer memory go first). Strength is NOT the eviction key: the recall hook stamps `last_recalled` on every Read, so anything in active use holds strength ≈ 1 and strength-ranking degenerates over the cap (`/memory-lint --decay` returns ~0 candidates there). Strength remains the *surfacing* signal for orphaned, never-read memories in `--decay` mode.
+- Start `MEMORY.md` with a pointer line: `` See `$MEMORY_PACK_HOME/SCHEMA.md` for the canonical contract. Shared across all projects. `` (use a code span, not a markdown link; on the original host the engine root is `~/Resilio.Sync/Memory.Pack`).
 
 ## Lifecycle operations
 

@@ -651,6 +651,19 @@ if [ -f "$SL" ]; then
     else
       bad "turns: corrupt file '$bad_val' renders safely" "line1: $l1"
     fi
+    # The FATAL variant is dash (Linux /bin/sh): an unguarded $(( )) on
+    # these values aborts the whole script there, not just a line. Run the
+    # same case under real dash where present (macOS + CI ubuntu both ship
+    # it) so the guard is proven against the shell that actually dies.
+    if command -v dash >/dev/null 2>&1; then
+      dl1=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 dash "$SL" \
+        < "$FIX/statusline-stdin-full.json" 2>/dev/null | head -n 1)
+      if echo "$dl1" | grep -q 'test-project' && ! echo "$dl1" | grep -q '↓'; then
+        ok "turns (dash): corrupt file '$bad_val' → line 1 renders, no indicator"
+      else
+        bad "turns (dash): corrupt file '$bad_val' renders safely" "line1: $dl1"
+      fi
+    fi
   done
 
   # Absent turns file → NO countdown indicator (turn 0 / headless graceful).

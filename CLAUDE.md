@@ -181,18 +181,27 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-23 suites in `tests/` — run all before any commit (CI mirrors the same
-loops on ubuntu + macos: `.github/workflows/test.yml`):
+24 suites in `tests/` — run all before any commit (CI mirrors the same
+loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
+fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
+suites fail:
 
 ```
-for t in tests/test_*.sh;  do bash "$t"  || echo "FAIL $t"; done
-for t in tests/test_*.mjs; do node "$t"  || echo "FAIL $t"; done
+fail=0
+for t in tests/test_*.sh;  do if bash "$t" >/dev/null; then :; else echo "FAIL $t"; fail=1; fi; done
+for t in tests/test_*.mjs; do if node "$t" >/dev/null; then :; else echo "FAIL $t"; fail=1; fi; done
+exit $fail
 ```
 
 `test_hash_shim` (value-preservation + python3 + loud-fail + statusline
 parity), `test_mph_resolution` (MEMORY_PACK_HOME + no-hardcoded-path,
 runtime-state-excluded), `test_hooks_wired`, `test_install`,
 `test_settings_merge`, `test_sdk_resolve`, `test_path_portability`,
+`test_update_recall_promotion` (the archive→active auto-promotion path:
+flat promote + MEMORY.md section insert + marker move + audit log,
+collision-skip, NaN-threshold fallback, nested archive/sub/ promotes to
+the memory ROOT by basename, below-threshold mutation guard, and the
+size-capped `.archive-promote.log` rotation),
 `test_recall_frontmatter_preserve` (recall hook must NOT reshape
 frontmatter — runs the real `update-recall.mjs` + real Python
 `parse_frontmatter` against flat/nested/`node_type` fixtures; guards the
@@ -254,7 +263,8 @@ extraction; plus the line-1 turns-until-autosave countdown —
 at the 30%/10%-of-interval boundaries, since>interval clamped to `0↓`,
 absent file → hidden, and a corrupt/torn file (a float or bare identifier)
 must NOT blank the whole render — a FATAL arithmetic error under dash
-(Linux /bin/sh), verified guarded under real `/bin/dash`),
+(Linux /bin/sh), suite-run under real `/bin/dash` where present (macOS and
+CI ubuntu both ship it), as are the garbage rate-limit-epoch renders),
 `test_bilingual_stdin` (invariant #3 across EVERY stdin-parsing hook:
 structural scan that any JSON-accessor read of a snake_case CC field
 carries its camel twin on the same line, plus behavioral camel-only

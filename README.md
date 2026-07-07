@@ -77,7 +77,8 @@ session start, so the current session won't have them.
 1. Preflights `bash git python3 jq sqlite3 node`.
 2. Copies the engine to the prefix (`~/.memory-pack` by default) — no `.git`,
    no runtime state.
-3. Merges **12 hook registrations** + `env.MEMORY_PACK_HOME` into
+3. Merges the hook registrations from `install/hooks.manifest.json` (the
+   canonical list) + `env.MEMORY_PACK_HOME` into
    `~/.claude/settings.json`. Your existing hooks and any unrelated keys are
    left exactly as they were; a one-time pristine backup is written to
    `~/.claude/settings.json.mp-bak`.
@@ -117,7 +118,7 @@ grep-able, and yours. The contract (types, frontmatter, lifecycle) is
 ~/.memory-pack/install.sh --uninstall          # or ./install.sh --uninstall from the clone
 ```
 
-This removes the 12 hooks, `env.MEMORY_PACK_HOME`, the `.statusLine` entry, and
+This removes the manifest hooks, `env.MEMORY_PACK_HOME`, the `.statusLine` entry, and
 the statusline symlink — and **only** those. Foreign hooks, foreign env keys,
 and a clean host's `settings.json` are restored exactly as they were
 pre-install. Your memory store is left intact.
@@ -169,10 +170,9 @@ export CLAUDE_AGENT_SDK=/path/to/sdk.mjs         # point at an existing copy
 | `install.sh` | the installer / uninstaller |
 | `hooks/` | the hook scripts (the engine proper) |
 | `index/` | the FTS5 indexer + search CLI |
-| `install/hooks.manifest.json` | canonical list of the 12 hook registrations |
+| `install/hooks.manifest.json` | canonical list of the hook registrations |
 | `statusline-command.sh` | the status line |
 | [`SCHEMA.md`](SCHEMA.md) | **the** memory contract: types, frontmatter, lifecycle |
-| [`docs/flow.md`](docs/flow.md) | architecture / data-flow walkthrough |
 | [`CLAUDE.md`](CLAUDE.md) | engine development & maintenance guide (for contributors) |
 
 After install, the live engine lives at the prefix (default `~/.memory-pack`);

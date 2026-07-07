@@ -13,7 +13,7 @@ Audit the per-project auto-memory store for drift and report a fix punch list. *
 ```
 ~/.claude/projects/<slugified-cwd>/memory/
 ```
-Slugify the absolute cwd by replacing `/` with `-` and prefixing `-`. Example: cwd `/Users/namhp/Resilio.Sync/Management` → `-Users-namhp-Resilio-Sync-Management`.
+Slugify the absolute cwd by replacing BOTH `/` and `.` with `-` (the leading `/` yields the `-` prefix). Example: cwd `/Users/namhp/Resilio.Sync/Management` → `-Users-namhp-Resilio-Sync-Management` (note the dot in `Resilio.Sync` became `-`).
 
 **Canonical schema** (shared across all projects, single source of truth):
 ```
@@ -73,7 +73,7 @@ Today's date is available in the system prompt's `currentDate` block. Use it as 
 
 ### 7. Index hygiene
 - `MEMORY.md` should stay under the 150-line soft cap (harness hard-truncates at 200 lines or 25KB per [official docs](https://code.claude.com/docs/en/memory)). Flag if approaching 150.
-- When the index is near or over 150 lines, eviction is by **lowest decay strength first**, not by date. Compute strength for every indexed memory using the formula in the Decay audit section below, then surface the weakest candidates under a dedicated **INDEX CAP** section of the report. Per-item fix flow is the same as `--decay` mode (reinforce / edit / archive / delete). Do NOT fall back to "remove oldest entries" — that was the legacy rule and it contradicts the decay model.
+- When the index is near or over 150 lines, propose evictions **FIFO (oldest `created` first) and by topic-overlap** (entries superseded by or duplicative of a newer memory go first), under a dedicated **INDEX CAP** section of the report. Strength is NOT the eviction key here: the recall hook keeps `last_recalled` fresh for everything actually read, so active-store strength collapses toward 1 and ranking by it returns ~0 candidates over the cap. Per-item fix flow is the same as `--decay` mode (reinforce / edit / archive / delete).
 - Each index line should be under ~150 chars. Flag overlong entries.
 
 ## How to run the audit
@@ -155,7 +155,7 @@ Group the output under a **DECAYED** severity and sort weakest-first. For each m
 - `reference_bar.md` (reference) — strength 0.27, never recalled, age 142d
 ```
 
-`<0.3` is a **surfacing threshold**, not an archive trigger. The historical `<0.1 AND 60d no recall` archive-candidate gate was removed — with the recall hook stamping `last_recalled` on every Read, it essentially never fired. **Archive proposals come from the INDEX CAP path** (see the main lint flow's section 7 "Index hygiene"), which kicks in when `MEMORY.md` approaches 150 lines and uses the same strength formula to rank weakest-first. Per-item fix flow is identical in DECAYED and INDEX CAP modes.
+`<0.3` is a **surfacing threshold**, not an archive trigger. The historical `<0.1 AND 60d no recall` archive-candidate gate was removed — with the recall hook stamping `last_recalled` on every Read, it essentially never fired. **Archive proposals come from the INDEX CAP path** (see the main lint flow's section 7 "Index hygiene"), which kicks in when `MEMORY.md` approaches 150 lines and proposes FIFO / topic-overlap candidates (strength-ranking degenerates there — everything in use is fresh). Per-item fix flow is identical in DECAYED and INDEX CAP modes.
 
 End with: **"Want me to reinforce, edit, or archive these? I'll go item by item."**
 
