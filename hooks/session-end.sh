@@ -17,6 +17,9 @@ INPUT=$(cat)
 # MEMORY.md / SESSIONS.md as well.
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // empty')
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty')
+# Tilde-expand like auto-save-stop.sh:61 — unexpanded, _mp_real_user_turns
+# reads 0 for EVERY session → trivial-skip forever → no replay, silently.
+TRANSCRIPT="${TRANSCRIPT/#\~/$HOME}"
 # Prefer workspace.project_dir (stable across cd's) to match statusline-command.sh.
 PROJECT_DIR=$(echo "$INPUT" | jq -r '.workspace.project_dir // .workspace.projectDir // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -107,8 +110,14 @@ if [ "$TURNS" -le 5 ]; then
     CONV_CHARS=$(_mp_conversation_chars "$TRANSCRIPT")
     RAW_BYTES=$(wc -c 2>/dev/null < "$TRANSCRIPT" | tr -d '[:space:]')
     case "$RAW_BYTES" in ''|*[!0-9]*) RAW_BYTES=0 ;; esac
-    if [ "$CONV_CHARS" -ge "${MP_REPLAY_MIN_CHARS:-25000}" ] \
-       || [ "$RAW_BYTES" -ge "${MP_REPLAY_MIN_BYTES:-200000}" ]; then
+    # Knobs must be pure integers — a garbage env value would error the
+    # [ -ge ] tests to false and silently kill the rescue axis.
+    MIN_CHARS="${MP_REPLAY_MIN_CHARS:-25000}"
+    case "$MIN_CHARS" in ''|*[!0-9]*) MIN_CHARS=25000 ;; esac
+    MIN_BYTES="${MP_REPLAY_MIN_BYTES:-200000}"
+    case "$MIN_BYTES" in ''|*[!0-9]*) MIN_BYTES=200000 ;; esac
+    if [ "$CONV_CHARS" -ge "$MIN_CHARS" ] \
+       || [ "$RAW_BYTES" -ge "$MIN_BYTES" ]; then
       RESCUE=1
     fi
   fi
@@ -124,11 +133,19 @@ REAL_DIR="$(cd "$SCRIPT_DIR" && cd "$(dirname "$(readlink "$SCRIPT_PATH" 2>/dev/
 REPLAY="$REAL_DIR/replay.mjs"
 [ ! -f "$REPLAY" ] && REPLAY="$SCRIPT_DIR/replay.mjs"
 
-# Clean stale boot context, tmp files (legacy .tmp and the .tmp.<pid>
-# family), PID file, error marker, and error log for this project. The
-# error marker/log are only meaningful between runs — the new run either
-# clears them (success / benign no-op) or re-writes them (failure).
-rm -f "$BOOT_CTX" "$BOOT_CTX".tmp* "$PID_FILE" "$ERR_MARKER" "$ERR_LOG"
+# A still-unconsumed boot context here is a FRESH summary that never got
+# injected (a concurrent same-project session's replay, or one that landed
+# after this session's last prompt). Snapshot it to the carry-forward slot
+# instead of destroying it — losing it breaks the memory chain exactly like
+# a clobbered skip did (feedback_skip_replay_must_carry_forward). The skip
+# paths above already preserve it (carry_forward's never-clobber guard);
+# the launch path must not be the one place that deletes it.
+[ -f "$BOOT_CTX" ] && mv -f "$BOOT_CTX" "$SCRIPT_DIR/.boot-context-last-${PROJECT_HASH}"
+# Clean tmp files (legacy .tmp and the .tmp.<pid> family), PID file, error
+# marker, and error log for this project. The error marker/log are only
+# meaningful between runs — the new run either clears them (success /
+# benign no-op) or re-writes them (failure).
+rm -f "$BOOT_CTX".tmp* "$PID_FILE" "$ERR_MARKER" "$ERR_LOG"
 
 # Drop this session's boot marker and prune stale markers (>3 days).
 [ -n "$SESSION_ID" ] && rm -f "$SCRIPT_DIR/.boot-marker-${SESSION_ID}"
@@ -162,6 +179,7 @@ MP_NOTIFY_TITLE="Claude Code · $(printf '%s' "$PROJECT_NAME" | tr -d '"\\')"
 nohup env \
   MP_PID_FILE="$PID_FILE" \
   MP_BOOT_CTX="$BOOT_CTX" \
+  MP_LAST_BOOT="$SCRIPT_DIR/.boot-context-last-${PROJECT_HASH}" \
   MP_ERR_MARKER="$ERR_MARKER" \
   MP_ERR_LOG="$ERR_LOG" \
   MP_REPLAY="$REPLAY" \
@@ -180,6 +198,15 @@ nohup env \
       osascript -e "display notification \"Replay finished\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true
     elif [ "$STATUS" -eq 2 ]; then
       rm -f "$MP_TMP" "$MP_ERR_MARKER" "$MP_ERR_LOG"
+      # Benign no-op, but this session already passed the non-trivial gate:
+      # leaving nothing breaks the memory chain the same way an unguarded
+      # skip did (feedback_skip_replay_must_carry_forward). Resurrect the
+      # carry-forward snapshot (never clobber a fresh context).
+      if [ ! -f "$MP_BOOT_CTX" ] && [ -f "$MP_LAST_BOOT" ]; then
+        { printf "[Carry-forward: replay found nothing to summarize (exit 2). The summary below is from a prior session, not the one that just ended.]\n\n"
+          awk "NR==1 && /^\[Carry-forward:/ {h=1; next} NR==2 && h && /^\$/ {next} {print}" "$MP_LAST_BOOT"
+        } > "$MP_BOOT_CTX"
+      fi
     else
       rm -f "$MP_TMP"
       ERR_TAIL=$(tail -c 400 "$MP_ERR_LOG" 2>/dev/null | tr "\n" " " | sed "s/  */ /g; s/^ *//; s/ *\$//")

@@ -144,6 +144,27 @@ case "$OUT2" in
         "no recognizable content loaded | out=[$OUT2]" ;;
 esac
 
+# --- layer 3b: empty project_dir AND cwd (IFS-tab field collapse) ------
+# CC stdin with workspace.project_dir="" and cwd="" used to field-shift the
+# @tsv+IFS-tab read (tab is IFS *whitespace*: runs collapse, empty fields
+# vanish) — PROJECT_DIR received the SESSION ID string, the resolver walked
+# a junk path, and PROJECT_HASH pointed nowhere. With a non-whitespace
+# separator the empty fields survive positionally and the $PWD fallback +
+# transcript-anchored resolver find the project (the hook's cwd IS the
+# project here, as in a real session).
+rm -f "$ENGINE/hooks/.boot-context-${SUB_HASH}"
+printf 'TITLE: empty-fields test\nSUMMARY: US-separated parse\n' > "$ENGINE/hooks/.boot-context-${PARENT_HASH}"
+SID_EF="test-slug-anchor-3333"
+TRANSCRIPT_EF="$TRANSCRIPT_DIR/$SID_EF.jsonl"
+: > "$TRANSCRIPT_EF"
+STDIN_EF="$(printf '{"hook_event_name":"UserPromptSubmit","session_id":"%s","transcript_path":"%s","cwd":"","workspace":{"project_dir":""}}' "$SID_EF" "$TRANSCRIPT_EF")"
+OUT_EF="$(cd "$PARENT_REAL" && printf '%s' "$STDIN_EF" | HOME="$FAKE_HOME" "$ENGINE/hooks/boot-inject.sh" 2>/dev/null || true)"
+case "$OUT_EF" in
+  *"empty-fields test"*) ok "boot-inject survives empty project_dir+cwd (no IFS-tab field shift)" ;;
+  *) bad "boot-inject survives empty project_dir+cwd (no IFS-tab field shift)" \
+         "expected 'empty-fields test' | out=[$OUT_EF]" ;;
+esac
+
 # --- layer 4: statusline parity (invariant #2) -------------------------
 # statusline-command.sh must derive the SAME PROJECT_HASH as the hooks so
 # .skip-replay-<hash> targets the same sentinel. Mirror the same scenario:

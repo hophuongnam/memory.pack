@@ -22,6 +22,9 @@ SAVE_INTERVAL=10
 # attachments dominate the transcript yet are context, not work (a 2.6MB session
 # fired on prompt 1 at only ~180k relevant). Env-tunable; high disables the axis.
 MP_AUTOSAVE_MIN_CHARS="${MP_AUTOSAVE_MIN_CHARS:-100000}"
+# Pure integer or the [ -ge ] below errors to false and silently kills the
+# size axis — the exact tool-heavy amnesia gap this axis exists to close.
+case "$MP_AUTOSAVE_MIN_CHARS" in ''|*[!0-9]*) MP_AUTOSAVE_MIN_CHARS=100000 ;; esac
 STATE_DIR="$HOME/.claude/hook_state"
 mkdir -p "$STATE_DIR"
 
@@ -61,7 +64,7 @@ TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // 
 TRANSCRIPT_PATH="${TRANSCRIPT_PATH/#\~/$HOME}"
 
 # If already in a save cycle, let the AI stop normally
-if [ "$STOP_HOOK_ACTIVE" = "True" ] || [ "$STOP_HOOK_ACTIVE" = "true" ]; then
+if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
     echo "{}"
     exit 0
 fi

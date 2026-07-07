@@ -353,6 +353,30 @@ wait_for_launch "sid-knob-low" \
   && ok "session-end: lowered MP_REPLAY_MIN_BYTES rescues the trivial session" \
   || bad "session-end: lowered MP_REPLAY_MIN_BYTES rescues the trivial session" "node stub never invoked"
 
+# F) tilde transcript_path: CC may emit ~/-prefixed paths; auto-save-stop
+#    expands them defensively, session-end must too — unexpanded, EVERY
+#    session reads as 0 turns → trivial-skip forever → no replay, silently.
+FH_TILDE="$SBX/fake-home-tilde"; mkdir -p "$FH_TILDE"
+cp "$REAL" "$FH_TILDE/real-tilde.jsonl"
+rm -f "$BC"
+printf '{"session_id":"sid-tilde","transcript_path":"~/real-tilde.jsonl","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$PROJ" "$PROJ" \
+  | HOME="$FH_TILDE" PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+wait_for_launch "sid-tilde" \
+  && ok "session-end: tilde transcript_path expands (6-turn session replays)" \
+  || bad "session-end: tilde transcript_path expands (6-turn session replays)" "node stub never invoked"
+
+# G) garbage knob env: MP_REPLAY_MIN_CHARS=abc must fall back to the default
+#    (25000), not silently kill the rescue axis via a broken [ -ge ] test —
+#    the conversation monster (~30k chars) must still replay.
+rm -f "$BC"
+printf '{"session_id":"sid-knob-garbage","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$CONV" "$PROJ" "$PROJ" \
+  | MP_REPLAY_MIN_CHARS=abc PATH="$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+wait_for_launch "sid-knob-garbage" \
+  && ok "session-end: non-integer MP_REPLAY_MIN_CHARS falls back to default (axis alive)" \
+  || bad "session-end: non-integer MP_REPLAY_MIN_CHARS falls back to default (axis alive)" "node stub never invoked"
+
 # --- layer 3: auto-save-stop.sh behavioral --------------------------------
 export HOME="$SBX/fake-home"
 mkdir -p "$HOME/.claude"
@@ -566,6 +590,16 @@ OUT=$(printf '{"session_id":"sid-heavy-lo","stop_hook_active":false,"transcript_
 case "$OUT" in
   *'"decision"'*'"block"'*) ok "auto-save-stop: lowered MP_AUTOSAVE_MIN_CHARS rescues a small session" ;;
   *) bad "auto-save-stop: lowered MP_AUTOSAVE_MIN_CHARS rescues a small session" "no block: $OUT" ;;
+esac
+
+# (7) Garbage knob env: MP_AUTOSAVE_MIN_CHARS=100k must fall back to the
+# default (100000), not silently disable the size axis via a broken [ -ge ]
+# test — BASHY (120000 relevant) must still block.
+OUT=$(printf '{"session_id":"sid-bashy-garbage","stop_hook_active":false,"transcript_path":"%s"}' "$BASHY" \
+  | MP_AUTOSAVE_MIN_CHARS=100k bash "$HOOKS/auto-save-stop.sh" 2>/dev/null)
+case "$OUT" in
+  *'"decision"'*'"block"'*) ok "auto-save-stop: non-integer MP_AUTOSAVE_MIN_CHARS falls back to default (axis alive)" ;;
+  *) bad "auto-save-stop: non-integer MP_AUTOSAVE_MIN_CHARS falls back to default (axis alive)" "no block: $OUT" ;;
 esac
 
 echo "----"

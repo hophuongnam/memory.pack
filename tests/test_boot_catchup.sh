@@ -132,6 +132,22 @@ s="$(run "$G/boot-catchup.sh")"
   && ok "route: snapshot-only dir (.boot-context-last-* only) -> no exec" \
   || bad "route: snapshot-only dir -> no exec" "out=[$s]"
 
+# tmp-only dir: a RUNNING replay's .boot-context-<hash>.tmp.<pid> is not a
+# live context — the forkless gate must reject it WITHOUT falling through to
+# the stdin/jq/hash forks (for the minutes a replay runs, every tool call in
+# every session of every project pays those forks otherwise). Observable via
+# a PATH-stubbed jq that records any invocation.
+rm -f "$G"/.boot-context-*
+: > "$G/.boot-context-$MYHASH.tmp.999"
+JQSTUB="$TMP/jqstub"; mkdir -p "$JQSTUB"
+printf '#!/bin/sh\ntouch "%s/jq-forked"\nexit 1\n' "$TMP" > "$JQSTUB/jq"
+chmod +x "$JQSTUB/jq"
+t="$(printf '%s' "$STDIN_JSON" | PATH="$JQSTUB:$PATH" "$G/boot-catchup.sh" 2>/dev/null)"
+{ [ -z "$t" ] && [ ! -f "$TMP/jq-forked" ]; } \
+  && ok "route: tmp-only dir (.boot-context-<hash>.tmp.<pid>) -> forkless reject (no jq)" \
+  || bad "route: tmp-only dir -> forkless reject" "out=[$t] jq-forked=$([ -f "$TMP/jq-forked" ] && echo y || echo n)"
+rm -f "$G"/.boot-context-* "$TMP/jq-forked"
+
 # ----------------------------------------------------------------------
 # Layer 2: REAL boot-inject, EVENT=PostToolUse, end-to-end
 # ----------------------------------------------------------------------
@@ -158,6 +174,11 @@ fo="$(erun)"
   || bad "e2e: foreign-only dir -> no emit, marker untouched" "emit=[$fo] marker=[$(cat "$ENGINE/.boot-marker-$ESID" 2>/dev/null)]"
 
 # Our live context lands mid-turn -> emitted as PostToolUse additionalContext.
+# Designed precondition: the session has NOT already booted — SessionStart
+# left the marker at "pending" (replay still running) or "none". A "loaded"
+# marker means a fresh live context is a CONCURRENT session's — see the
+# steal case below.
+printf 'pending' > "$ENGINE/.boot-marker-$ESID"
 printf 'TITLE: catchup-e2e\nSUMMARY: mid-turn injection works\n' > "$ENGINE/.boot-context-$EHASH"
 OUT="$(erun)"
 case "$OUT" in
@@ -179,6 +200,19 @@ OUT2="$(erun)"
 [ -z "$OUT2" ] \
   && ok "e2e: after consume, further tool calls inject nothing (foreign ignored)" \
   || bad "e2e: after consume, further tool calls inject nothing" "out=[$OUT2]"
+
+# Steal guard: a session that ALREADY booted (marker "loaded") must NOT
+# consume a fresh live context mid-turn — that file is a concurrent
+# same-project session's replay output; eating it here starves that
+# session's successor ("[No boot context available]"). No emit, file intact.
+printf 'loaded' > "$ENGINE/.boot-marker-$ESID"
+printf 'TITLE: concurrent-fresh\nSUMMARY: belongs to the other session\n' > "$ENGINE/.boot-context-$EHASH"
+OUT3="$(erun)"
+{ [ -z "$OUT3" ] && [ -f "$ENGINE/.boot-context-$EHASH" ]; } \
+  && ok "e2e: booted session (marker=loaded) steals nothing mid-turn (file intact)" \
+  || bad "e2e: booted session (marker=loaded) steals nothing mid-turn" \
+        "out=[$OUT3] live=$([ -f "$ENGINE/.boot-context-$EHASH" ] && echo intact || echo consumed)"
+rm -f "$ENGINE/.boot-context-$EHASH"
 
 echo "----"
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fail FAILED"; exit 1; fi

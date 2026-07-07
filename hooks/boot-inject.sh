@@ -5,8 +5,13 @@
 INPUT=$(cat)
 # Single jq call extracts all four fields together — each separate jq fork
 # is ~30-40ms on macOS, and four serial calls pushed the early marker write
-# below past the 50ms window where statusline-command.sh races us. Tab
-# delimiter is safe because none of these fields can contain tabs.
+# below past the 50ms window where statusline-command.sh races us. The
+# separator is US (0x1f, statusline-command.sh's idiom), NOT tab/@tsv: tab
+# is IFS *whitespace*, so runs collapse and EMPTY fields vanish — with
+# workspace.project_dir="" (the documented-real CC case) every later field
+# shifted left and SESSION_ID received "". join() also skips @tsv's
+# backslash-escaping, so a path containing `\` hashes identically here and
+# in session-end.sh. Keep in sync with boot-catchup.sh's parse.
 #
 # Field-name aliases: CC's published hook docs say snake_case
 # (`session_id`, `hook_event_name`), but the runtime hook stdin emits
@@ -16,7 +21,7 @@ INPUT=$(cat)
 # 164ms with a successful stdout, but no `.boot-marker-${SESSION_ID}`
 # file landed because SESSION_ID parsed empty → marker write was gated
 # off.
-IFS=$'\t' read -r EVENT PROJECT_DIR CWD SESSION_ID <<<"$(echo "$INPUT" | jq -r '[.hook_event_name // .hookEventName // "UserPromptSubmit", .workspace.project_dir // .workspace.projectDir // "", .cwd // "", .session_id // .sessionId // ""] | @tsv')"
+IFS=$'\037' read -r EVENT PROJECT_DIR CWD SESSION_ID <<<"$(echo "$INPUT" | jq -r '[.hook_event_name // .hookEventName // "UserPromptSubmit", .workspace.project_dir // .workspace.projectDir // "", .cwd // "", .session_id // .sessionId // ""] | join("\u001f")')"
 # Last-resort: derive session_id from transcript_path basename if both
 # field-name variants returned empty. CC always passes transcript_path,
 # and the filename is `${SESSION_ID}.jsonl`.
@@ -64,7 +69,13 @@ replay_running() {
 # non-terminal and warrants re-evaluation (replay may finish mid-session).
 PRIOR_MARKER=""
 [ -n "$SESSION_ID" ] && [ -f "$MARKER_FILE" ] && PRIOR_MARKER=$(cat "$MARKER_FILE" 2>/dev/null)
-if [ "$EVENT" = "UserPromptSubmit" ] && [ -n "$PRIOR_MARKER" ] && [ "$PRIOR_MARKER" != "pending" ]; then
+# PostToolUse (boot-catchup hand-off) shares the gate: a session already
+# "loaded" must not consume a live context mid-turn — that file can only be
+# a CONCURRENT same-project session's fresh replay output; eating it here
+# starves that session's successor. "none"/"pending" + a late-landing file
+# is the designed catch-up case and falls through to consume.
+if { [ "$EVENT" = "UserPromptSubmit" ] || [ "$EVENT" = "PostToolUse" ]; } \
+   && [ -n "$PRIOR_MARKER" ] && [ "$PRIOR_MARKER" != "pending" ]; then
   # "loaded" is truly terminal. "none" is terminal UNLESS replay finished
   # after the marker was set (race: replay completes between SessionStart
   # and the next UserPromptSubmit). In that case, re-evaluate.

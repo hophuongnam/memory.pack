@@ -34,15 +34,23 @@ d=${0%/*}
 # bites: cache our resolved hash in a per-session sentinel after first run.
 _live=0
 for f in "$d"/.boot-context-*; do
-  case "$f" in *-last-*) continue ;; esac   # carry-forward snapshot, not fresh
+  case "$f" in
+    *-last-*) continue ;;   # carry-forward snapshot, not fresh
+    *.tmp.*)  continue ;;   # a RUNNING replay's tmp — not consumable yet;
+                            # without this arm every tool call in every
+                            # session pays the stdin+jq+hash forks for the
+                            # whole minutes-long replay window
+  esac
   [ -e "$f" ] && { _live=1; break; }
 done
 [ "$_live" = 1 ] || exit 0
 
 INPUT=$(cat)
 . "$d/_lib.sh" || exit 0
-# One jq fork (snake/camel tolerant), mirroring boot-inject.sh's extraction.
-IFS=$'\t' read -r _tr _pdir _cwd <<<"$(printf '%s' "$INPUT" | jq -r '[.transcript_path // .transcriptPath // "", .workspace.project_dir // .workspace.projectDir // "", .cwd // ""] | @tsv')"
+# One jq fork (snake/camel tolerant), mirroring boot-inject.sh's extraction —
+# US separator, not @tsv/IFS-tab: empty fields must survive positionally
+# (tab is IFS whitespace; runs collapse). Keep in sync with boot-inject.sh.
+IFS=$'\037' read -r _tr _pdir _cwd <<<"$(printf '%s' "$INPUT" | jq -r '[.transcript_path // .transcriptPath // "", .workspace.project_dir // .workspace.projectDir // "", .cwd // ""] | join("\u001f")')"
 _key=$(_mp_resolve_project_key "$_tr" "${_pdir:-${_cwd:-$PWD}}")
 _hash=$(printf '%s' "$_key" | _mp_hash)
 

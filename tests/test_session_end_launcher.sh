@@ -84,6 +84,13 @@ EOF
 printf '#!/bin/sh\nexit 0\n' > "$STUB_FAIL/osascript"
 chmod +x "$STUB_FAIL/node" "$STUB_FAIL/osascript"
 
+# Benign stub: nothing to summarize (replay.mjs exit-2 contract).
+STUB_BENIGN="$SBX/bin-benign"
+mkdir -p "$STUB_BENIGN"
+printf '#!/bin/sh\nexit 2\n' > "$STUB_BENIGN/node"
+printf '#!/bin/sh\nexit 0\n' > "$STUB_BENIGN/osascript"
+chmod +x "$STUB_BENIGN/node" "$STUB_BENIGN/osascript"
+
 # --- case 1: apostrophe in the project path ---------------------------------
 PROJ="$SBX/Nam's Proj.2026"
 mkdir -p "$PROJ"
@@ -186,6 +193,64 @@ if [ -f "$BC3" ] && grep -q '^\[Carry-forward: replay skipped by user request' "
 else
   bad "skip sentinel: prior boot context carried forward with skip header" \
       "bc=$(cat "$BC3" 2>/dev/null | head -2 | tr '\n' ' | ')"
+fi
+
+# --- case 5: exit-2 (benign no-op) must carry the prior context forward -----
+# A LAUNCHED replay already passed the non-trivial gate; exiting 2 with no
+# output (e.g. getSessionMessages empty) must not break the memory chain —
+# same contract as the skip paths (feedback_skip_replay_must_carry_forward).
+# The old branch deleted all evidence and wrote nothing: next session booted
+# "[No boot context available]" silently.
+PROJ5="$SBX/Benign.Proj"
+mkdir -p "$PROJ5"
+HASH5=$(printf '%s' "$PROJ5" | _mp_hash)
+BC5="$ENGINE/.boot-context-${HASH5}"
+printf 'TITLE: pre-benign session\nSUMMARY: carried over exit-2\n' > "$ENGINE/.boot-context-last-${HASH5}"
+
+printf '{"session_id":"sid-benign","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ5" "$PROJ5" \
+  | PATH="$STUB_BENIGN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+got=0; i=0
+while [ "$i" -lt 8 ]; do
+  [ -f "$BC5" ] && { got=1; break; }
+  sleep 0.5; i=$((i + 1))
+done
+if [ "$got" -eq 1 ] && grep -q '^\[Carry-forward:' "$BC5" && grep -q 'TITLE: pre-benign session' "$BC5"; then
+  ok "exit-2: prior boot context carried forward (benign no-op keeps the chain)"
+else
+  bad "exit-2: prior boot context carried forward (benign no-op keeps the chain)" \
+      "bc=$(cat "$BC5" 2>/dev/null | head -2 | tr '\n' '|')"
+fi
+[ ! -f "$ENGINE/.replay-error-${HASH5}" ] \
+  && ok "exit-2: no error marker (still benign, not a failure banner)" \
+  || bad "exit-2: no error marker" "marker=$(cat "$ENGINE/.replay-error-${HASH5}" 2>/dev/null)"
+
+# --- case 6: a fresh UNCONSUMED boot context at launch is preserved ----------
+# If BOOT_CTX still exists at SessionEnd (concurrent same-project session's
+# replay landed, or ours landed after the last prompt), it was never injected.
+# The launch path used to rm it — a silently lost summary. It must be
+# snapshotted to the carry-forward slot instead.
+PROJ6="$SBX/Fresh.Proj"
+mkdir -p "$PROJ6"
+HASH6=$(printf '%s' "$PROJ6" | _mp_hash)
+BC6="$ENGINE/.boot-context-${HASH6}"
+LAST6="$ENGINE/.boot-context-last-${HASH6}"
+printf 'TITLE: unconsumed fresh\nSUMMARY: never injected\n' > "$BC6"
+
+printf '{"session_id":"sid-fresh","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ6" "$PROJ6" \
+  | PATH="$STUB_OK:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+got=0; i=0
+while [ "$i" -lt 8 ]; do
+  grep -q '^TITLE: stub replay ok' "$BC6" 2>/dev/null && { got=1; break; }
+  sleep 0.5; i=$((i + 1))
+done
+[ "$got" -eq 1 ] || bad "unconsumed: new replay still lands after preservation" "bc=$(cat "$BC6" 2>/dev/null | head -1)"
+if [ -f "$LAST6" ] && grep -q 'TITLE: unconsumed fresh' "$LAST6"; then
+  ok "unconsumed: fresh never-injected context snapshotted to -last- (not destroyed)"
+else
+  bad "unconsumed: fresh never-injected context snapshotted to -last- (not destroyed)" \
+      "last=$(cat "$LAST6" 2>/dev/null | head -1)"
 fi
 
 echo "----"
