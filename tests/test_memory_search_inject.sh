@@ -381,5 +381,35 @@ errout=$(MEMORY_PACK_HOME="$SBX/zerodb" python3 "$SEARCH" kafka 2>&1 >/dev/null)
   && ok "search CLI: 0-byte db → exit 2 with hint (not a 'no such table' crash)" \
   || bad "search CLI: 0-byte db → exit 2 with hint" "rc=$rc err=[${errout:0:160}]"
 
+# --- inject: OUTPUT_LIMIT caps the hit list -------------------------------
+# The cap was never asserted (the corpus had exactly ONE relevant doc for
+# every earlier query). Four docs share rare vocabulary; the default cap
+# must emit exactly 3 hit lines, and the env knob must bite in both
+# directions.
+i=1
+while [ "$i" -le 4 ]; do
+  cat > "$MEMDIR/reference_falcon_$i.md" <<MD
+---
+name: reference_falcon_$i
+description: peregrine falcon aviary telemetry notes $i
+type: reference
+---
+Peregrine falcon aviary telemetry channel $i: the peregrine falcon aviary
+telemetry beacons report roost telemetry for the falcon aviary.
+MD
+  python3 "$INDEXER" --file "$MEMDIR/reference_falcon_$i.md" --quiet 2>/dev/null
+  i=$((i + 1))
+done
+OUT=$(run_inject "peregrine falcon aviary telemetry beacons roost")
+nhits=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -c '^- \[bm25=')
+[ "$nhits" = "3" ] \
+  && ok "inject: default OUTPUT_LIMIT caps at 3 hits (4 candidates)" \
+  || bad "inject: default OUTPUT_LIMIT caps at 3 hits" "nhits=$nhits out=[${OUT:0:200}]"
+OUT=$(MEMORY_SEARCH_OUTPUT_LIMIT=1 run_inject "peregrine falcon aviary telemetry beacons roost")
+nhits=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -c '^- \[bm25=')
+[ "$nhits" = "1" ] \
+  && ok "inject: MEMORY_SEARCH_OUTPUT_LIMIT=1 knob bites" \
+  || bad "inject: MEMORY_SEARCH_OUTPUT_LIMIT=1 knob bites" "nhits=$nhits"
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

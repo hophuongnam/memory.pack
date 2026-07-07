@@ -103,6 +103,15 @@ b="$(run "$G/boot-catchup.sh")"
   && ok "route: our live .boot-context-<myhash> (amid foreign) -> exec" \
   || bad "route: our live .boot-context-<myhash> -> exec" "out=[$b]"
 
+# Case B2: same as B but with camelCase-ONLY stdin (invariant #3 — CC field
+# names drift between releases; a snake-only parse would resolve no hash and
+# silently never catch up mid-turn).
+CAMEL_JSON="$(printf '{"hookEventName":"PostToolUse","sessionId":"sid-x","transcriptPath":"%s","cwd":"%s","toolName":"Bash","workspace":{"projectDir":"%s"}}' "$TR" "$PROJ" "$PROJ")"
+b2="$(printf '%s' "$CAMEL_JSON" | "$G/boot-catchup.sh" 2>/dev/null)"
+[ "$b2" = "EXEC_BI" ] \
+  && ok "route: camelCase-only stdin still resolves our hash -> exec" \
+  || bad "route: camelCase-only stdin still resolves our hash -> exec" "out=[$b2]"
+
 # Case C: only OUR carry-forward snapshot (+ foreign) -> no re-consume
 rm -f "$G/.boot-context-$MYHASH"
 : > "$G/.boot-context-last-$MYHASH"

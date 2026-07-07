@@ -51,12 +51,17 @@ if [ ! -f "$MERGE" ]; then echo "FAIL  install/merge-settings.sh missing ($MERGE
   || { bad "merge exits 0" "$(cat "$TMP/err")"; echo "----"; echo "$fail FAILED"; exit 1; }
 jq -e . "$TMP/after.json" >/dev/null 2>&1 && ok "output is valid JSON" || bad "output is valid JSON" "$(cat "$TMP/err")"
 
-mpcount() { jq '[.hooks[]?[]?.hooks[]? | select((.command//"")|test("/hooks/(boot-inject|boot-catchup|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$"))] | length' "$1"; }
+# Script-name alternation + expected count DERIVED from the manifest — a
+# hardcoded list silently under-counts the day a hook is added (the old
+# regex named 10 scripts and would have passed with a new hook missing).
+MP_RE="/hooks/($(jq -r '[.entries[].script | sub("\\.sh$";"")] | unique | join("|")' "$MAN"))\\.sh\$"
+MP_EXPECT=$(jq '.entries | length' "$MAN")
+mpcount() { jq --arg re "$MP_RE" '[.hooks[]?[]?.hooks[]? | select((.command//"")|test($re))] | length' "$1"; }
 c=$(mpcount "$TMP/after.json")
-[ "$c" = "13" ] && ok "all 13 MP entries present" || bad "all 13 MP entries present" "got $c"
+[ "$c" = "$MP_EXPECT" ] && ok "all $MP_EXPECT manifest entries present" || bad "all $MP_EXPECT manifest entries present" "got $c"
 
 # every MP command uses the new prefix; none keep the stale /old prefix
-badpfx=$(jq -r '[.hooks[]?[]?.hooks[]?.command//empty | select(test("/hooks/(boot-inject|boot-catchup|session-end|memory-index-reconcile|memory-index-update|memory-recall|archive-resurrect|memory-search-inject|auto-save-stop|log-token-rate)\\.sh$")) | select(startswith("'"$PREFIX"'/hooks/")|not)] | length' "$TMP/after.json")
+badpfx=$(jq -r --arg re "$MP_RE" '[.hooks[]?[]?.hooks[]?.command//empty | select(test($re)) | select(startswith("'"$PREFIX"'/hooks/")|not)] | length' "$TMP/after.json")
 [ "$badpfx" = "0" ] && ok "all MP commands use new prefix (stale replaced)" || bad "stale prefix replaced" "$badpfx wrong-prefix"
 
 # spot-check a specific entry: PostToolUse/MultiEdit -> memory-index-update.sh t=3

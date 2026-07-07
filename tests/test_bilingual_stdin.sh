@@ -41,9 +41,9 @@ prompt:userPrompt"
 
 # every hook that reads CC stdin (statusline included — it parses the same
 # JSON shape). _lib.sh and the .mjs workers receive argv, not stdin.
-FILES="boot-inject.sh session-end.sh auto-save-stop.sh log-token-rate.sh
-memory-recall.sh memory-index-update.sh archive-resurrect.sh
-memory-search-inject.sh"
+FILES="boot-inject.sh boot-catchup.sh session-end.sh auto-save-stop.sh
+log-token-rate.sh memory-recall.sh memory-index-update.sh
+archive-resurrect.sh memory-search-inject.sh"
 
 for f in $FILES; do
   path="$HOOKS/$f"

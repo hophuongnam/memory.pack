@@ -212,7 +212,6 @@ esac
 # matters (cwd-based logic would still resolve here because workspace=SUB).
 # Both sentinels present → the PARENT one is what statusline must look at.
 : > "$SL_PREFIX/hooks/.skip-replay-${SUB_HASH}"
-SL_OUT2="$(printf '%s' "$SL_STDIN" | MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 # We can't directly tell which sentinel triggered the indicator, so prove
 # parity by REMOVING the PARENT sentinel and keeping only SUB — the
 # correct resolver should now NOT render the indicator, because hooks

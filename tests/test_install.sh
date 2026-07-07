@@ -247,5 +247,31 @@ HOME="$FH2" bash "$INSTALL" --prefix "$PFX2" --yes >/dev/null 2>&1; rc2=$?
   || bad "skill: pre-existing real dir NOT clobbered or polluted (foreign-safe)"
 rm -rf "$SBX2"
 
+# --- invariant #5 pin: every .gitignore pattern is packaging-excluded -------
+# Runtime state is never packaged: .gitignore (repo hygiene) and install.sh
+# EXCL_NAMES (rsync/tar packaging) must agree. Before this pin, deleting an
+# exclude from EXCL_NAMES failed NOTHING — the next install would ship (or,
+# pre-Batch-A, delete) live runtime state. Every non-comment .gitignore
+# pattern must be covered by some EXCL_NAMES pattern (string-glob match on
+# the full pattern or its basename — rsync basename patterns match anywhere).
+EXCL_LIST="$(sed -n '/^EXCL_NAMES=(/,/^)/p' "$HERE/../install.sh"   | grep -o "'[^']*'" | tr -d "'")"
+[ -n "$EXCL_LIST" ] || bad "EXCL_NAMES array extracted from install.sh" "empty extraction"
+while IFS= read -r gi; do
+  case "$gi" in ''|'#'*) continue ;; esac
+  gi="${gi%/}"                      # trailing dir slash
+  gibase="${gi##*/}"                # basename form
+  covered=0
+  for e in $EXCL_LIST; do
+    # shellcheck disable=SC2254 — $e is deliberately a glob
+    case "$gi" in $e) covered=1; break ;; esac
+    case "$gibase" in $e) covered=1; break ;; esac
+  done
+  if [ "$covered" = 1 ]; then
+    ok "invariant #5: .gitignore '$gi' covered by EXCL_NAMES"
+  else
+    bad "invariant #5: .gitignore '$gi' covered by EXCL_NAMES" "no matching exclude — install would package/clobber it"
+  fi
+done < "$HERE/../.gitignore"
+
 echo "----"
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fail FAILED"; exit 1; fi
