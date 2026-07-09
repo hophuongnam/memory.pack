@@ -88,9 +88,13 @@ grep -q 'await import("@anthropic-ai/claude-agent-sdk/sdk.mjs")' "$INSTALL" \
   && ok "SDK bare-import probe uses a literal specifier" \
   || bad "SDK bare-import probe uses a literal specifier" "dead post-command env assignment still present"
 
-# settings merged: 13 MP entries w/ prefix, foreign survives, env set
+# settings merged: every manifest entry lands w/ prefix, foreign survives, env set.
+# Count comes FROM the manifest — it is the canonical registration list, so adding
+# a hook there can never leave this assertion pinned to a stale literal.
+NHOOKS=$(jq '.entries|length' "$SRC/install/hooks.manifest.json")
 mp=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp" = "13" ] && ok "settings.json: 13 MP entries with prefix" || bad "13 MP entries" "got $mp"
+[ "$mp" = "$NHOOKS" ] && ok "settings.json: all $NHOOKS manifest entries wired with prefix" \
+                      || bad "all manifest entries wired" "got $mp, manifest has $NHOOKS"
 jq -e '.hooks.PreToolUse[]?.hooks[]?|select(.command=="/foreign/x.sh")' "$FH/.claude/settings.json" >/dev/null \
   && ok "settings.json: foreign hook survived" || bad "foreign hook survived"
 jq -e '.env.MEMORY_PACK_HOME=="'"$PREFIX"'" and .theme=="dark"' "$FH/.claude/settings.json" >/dev/null \
@@ -150,7 +154,8 @@ run --prefix "$PREFIX" --yes >/dev/null 2>&1
   && ok "re-install still cleans stale engine files (--delete)" \
   || bad "re-install still cleans stale engine files (--delete)"
 mp2=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/hooks/"))]|length' "$FH/.claude/settings.json")
-[ "$mp2" = "13" ] && ok "idempotent re-install (still 13, not 26)" || bad "idempotent re-install" "got $mp2"
+[ "$mp2" = "$NHOOKS" ] && ok "idempotent re-install (still $NHOOKS, not doubled)" \
+                       || bad "idempotent re-install" "got $mp2, want $NHOOKS"
 { [ -L "$SL_LINK" ] && [ "$(readlink "$SL_LINK")" = "$PREFIX/statusline-command.sh" ]; } \
   && ok "statusline: symlink stable after idempotent re-install" || bad "statusline: symlink stable on re-install"
 { [ -L "$FH/.claude/skills/memory-search" ] && [ "$(readlink "$FH/.claude/skills/memory-search")" = "$PREFIX/skills/memory-search" ]; } \
@@ -169,7 +174,7 @@ mp3=$(jq '[.hooks[]?[]?.hooks[]?.command//empty|select(startswith("'"$PREFIX"'/h
 
 # --- uninstall works from the checkout even when PREFIX was already purged ---
 # `rm -rf ~/.memory-pack` then `./install.sh --uninstall` used to die
-# ("engine not found") BEFORE unwiring settings.json, stranding 13 dangling
+# ("engine not found") BEFORE unwiring settings.json, stranding all the dangling
 # hook registrations; the fallback to the checkout's own merge-settings.sh
 # must unwire them.
 PFX4="$FH/.memory-pack2"

@@ -40,6 +40,7 @@ THEME_FG_MEMORY_CRIT
 THEME_FG_MEMORY_OK
 THEME_FG_MEMORY_WARN
 THEME_FG_PWD
+THEME_FG_SCOPED_ICON
 THEME_FG_SKIP_REPLAY
 THEME_FG_VIBE
 THEME_GRAD_STOPS
@@ -85,7 +86,8 @@ if [ -f "$ICONS" ]; then
 
   # Every expected ICON_* var must be set under at least one mode.
   for icon in ICON_BRANCH ICON_DIRTY ICON_PWD ICON_MEMORY ICON_BOOT_OK ICON_BOOT_PENDING \
-              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS; do
+              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS \
+              ICON_SCOPED; do
     val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
     [ -n "$val" ] && ok "$icon exports under Nerd Font" || bad "$icon exports under Nerd Font"
   done
@@ -95,7 +97,8 @@ if [ -f "$ICONS" ]; then
   # Unicode fallback table intentionally leaves it empty (no widely-rendered
   # folder glyph that beats omitting it).
   for icon in ICON_BRANCH ICON_DIRTY ICON_MEMORY ICON_BOOT_OK ICON_BOOT_PENDING \
-              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS; do
+              ICON_BOOT_ERR ICON_SKIP_REPLAY ICON_CTX ICON_5H ICON_7D ICON_VIBE ICON_TURNS \
+              ICON_SCOPED; do
     val=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=0 . "$3" && printf "%s" "${'"$icon"':-}"' _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
     [ -n "$val" ] && ok "$icon exports under Unicode fallback" || bad "$icon exports under Unicode fallback"
   done
@@ -869,6 +872,172 @@ if [ -f "$SL" ]; then
   else
     ok "NERDFONT=1: no glyph-jammed-against-label in render"
   fi
+fi
+
+# ─── per-model (scoped) usage segment on line 2 ────────────────────────────
+# fetch-usage-worker.sh writes ~/.claude/hook_state/usage_scoped:
+#     <fetch_epoch>
+#     <pct> <resets_epoch> <display name>
+# The statusline reads it with a plain shell `read` (no jq — the ≤3-fork budget
+# pinned above depends on that) and renders one segment per scoped window after
+# 7d. Only the PERCENTAGE can go stale; the ↻ countdown is always recomputed
+# live from the stored resets epoch.
+if [ -f "$SL" ]; then
+  SHOME=$(mktemp -d); trap 'rm -rf "$TMPHOME" "$TMPLOG" "$SHOME"' EXIT
+  mkdir -p "$SHOME/.claude/hook_state"
+  # Same token-rate log as the other integration sections, so line 3 renders and
+  # a fatal-arith abort in the line-2 scoped block shows up as a missing line.
+  cp "$TMPHOME/.claude/statusline-token-rate.log" "$SHOME/.claude/" 2>/dev/null
+  SCACHE="$SHOME/.claude/hook_state/usage_scoped"
+  NOW=$(date +%s)
+  FUTURE=$(( NOW + 600000 ))
+
+  sl2() { COLUMNS="$1" HOME="$SHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" \
+            < "$FIX/statusline-stdin-full.json" 2>/dev/null | sed -n '2p'; }
+  # Everything printed AFTER the label — isolates the scoped segment from the
+  # ctx/5h/7d segments, which legitimately keep their bars and ↻ at every width.
+  seg_after() { printf '%s' "$1" | sed "s/.*$2//"; }
+
+  # The Unicode-fallback scoped icon, read from the icon table rather than
+  # duplicated here — the negative "row skipped" assertions below grep for it.
+  SCOPED_ICON=$(sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=0 . "$3" && printf "%s" "$ICON_SCOPED"' \
+                  _ "$HOOKS/_lib.sh" "$THEME" "$ICONS")
+  [ -n "$SCOPED_ICON" ] || bad "scoped: ICON_SCOPED resolvable for the skip assertions"
+
+  # --- fresh cache, one scoped window ---
+  printf '%s\n2 %s Fable\n' "$NOW" "$FUTURE" > "$SCACHE"
+
+  l2=$(sl2 200)
+  echo "$l2" | grep -q "$SCOPED_ICON" && ok "scoped: a good row renders the scoped icon" \
+                                      || bad "scoped: a good row renders the scoped icon" "$l2"
+  echo "$l2" | grep -q 'Fable' && ok "scoped: full mode renders the window name" \
+                               || bad "scoped: full mode renders the window name" "$l2"
+  s=$(seg_after "$l2" Fable)
+  echo "$s" | grep -q '2%'          && ok "scoped: full mode renders the pct"      || bad "scoped: full mode renders the pct" "$s"
+  echo "$s" | grep -qE '[▓░]'       && ok "scoped: full mode renders a bar"        || bad "scoped: full mode renders a bar" "$s"
+  echo "$s" | grep -q '↻'           && ok "scoped: full mode renders ↻ countdown"  || bad "scoped: full mode renders ↻ countdown" "$s"
+
+  # --- compact below full: pct only, no bar, no countdown ---
+  # Medium is the reason this exists: ctx+5h+7d at bar width 6 already spend
+  # ~66 of 80 columns, so a fourth full-width segment wraps the line.
+  for cols in 72 48; do
+    l2=$(sl2 "$cols")
+    echo "$l2" | grep -q 'Fable' && ok "scoped: COLUMNS=$cols still shows the window" \
+                                 || bad "scoped: COLUMNS=$cols still shows the window" "$l2"
+    s=$(seg_after "$l2" Fable)
+    echo "$s" | grep -qE '[▓░]' && bad "scoped: COLUMNS=$cols must not render a bar" "$s" \
+                                || ok "scoped: COLUMNS=$cols must not render a bar"
+    echo "$s" | grep -q '↻'     && bad "scoped: COLUMNS=$cols must not render ↻" "$s" \
+                                || ok "scoped: COLUMNS=$cols must not render ↻"
+    echo "$s" | grep -q '2%'    && ok "scoped: COLUMNS=$cols keeps the pct" \
+                                || bad "scoped: COLUMNS=$cols keeps the pct" "$s"
+  done
+
+  # The other three segments must be untouched: medium is still 6+6+6 bar chars.
+  l2=$(sl2 72)
+  bars=$(printf '%s' "$l2" | grep -oE '[▓░]' | wc -l | tr -d ' ')
+  [ "$bars" = "18" ] && ok "scoped: medium bar budget unchanged (ctx+5h+7d = 18)" \
+                     || bad "scoped: medium bar budget unchanged" "got $bars"
+
+  # --- staleness: render last-good under 24h, DROP the segment past it ---
+  printf '%s\n2 %s Fable\n' "$(( NOW - 80000 ))" "$FUTURE" > "$SCACHE"
+  sl2 200 | grep -q 'Fable' && ok "scoped: 22h-old cache still renders (last-good)" \
+                            || bad "scoped: 22h-old cache still renders"
+  printf '%s\n2 %s Fable\n' "$(( NOW - 90000 ))" "$FUTURE" > "$SCACHE"
+  sl2 200 | grep -q 'Fable' && bad "scoped: 25h-old cache must DROP the segment" \
+                            || ok "scoped: 25h-old cache must DROP the segment"
+  # Boundary, mutation-pinned. The fresh side keeps a few seconds of margin:
+  # the statusline reads its OWN `date +%s`, so a literal 86399 stamp flips to
+  # stale whenever the clock ticks between writing the cache and rendering it.
+  # 86395 still fails against any meaningful mutation of the 86400 constant.
+  printf '%s\n2 %s Fable\n' "$(( NOW - 86395 ))" "$FUTURE" > "$SCACHE"
+  sl2 200 | grep -q 'Fable' && ok "scoped: 86395s → fresh side of the 24h boundary" \
+                            || bad "scoped: 86395s → fresh side of the 24h boundary"
+  printf '%s\n2 %s Fable\n' "$(( NOW - 86400 ))" "$FUTURE" > "$SCACHE"
+  sl2 200 | grep -q 'Fable' && bad "scoped: 86400s → stale side of the 24h boundary" \
+                            || ok "scoped: 86400s → stale side of the 24h boundary"
+
+  # --- resets_epoch 0 sentinel (API sent no resets_at): show pct, hide ↻ ---
+  printf '%s\n2 0 Fable\n' "$NOW" > "$SCACHE"
+  l2=$(sl2 200)
+  echo "$l2" | grep -q 'Fable' && ok "scoped: epoch-0 sentinel still renders the pct" \
+                               || bad "scoped: epoch-0 sentinel still renders the pct" "$l2"
+  s=$(seg_after "$l2" Fable)
+  echo "$s" | grep -q '↻' && bad "scoped: epoch-0 sentinel must hide ↻ (not print 'now')" "$s" \
+                          || ok "scoped: epoch-0 sentinel must hide ↻ (not print 'now')"
+
+  # --- multiple scoped windows, and a display name containing spaces ---
+  printf '%s\n2 %s Fable\n41 %s Claude Opus 4.8\n' "$NOW" "$FUTURE" "$FUTURE" > "$SCACHE"
+  l2=$(sl2 200)
+  echo "$l2" | grep -q 'Fable'           && ok "scoped: first window renders"  || bad "scoped: first window renders" "$l2"
+  echo "$l2" | grep -q 'Claude Opus 4.8' && ok "scoped: spaced display name renders whole" \
+                                         || bad "scoped: spaced display name renders whole" "$l2"
+  echo "$l2" | grep -q '41%'             && ok "scoped: second window pct renders" || bad "scoped: second window pct renders" "$l2"
+
+  # --- absent cache: segment gone, the rest of line 2 intact ---
+  rm -f "$SCACHE"
+  l2=$(sl2 200)
+  echo "$l2" | grep -q 'Fable' && bad "scoped: no cache → no segment" "$l2" || ok "scoped: no cache → no segment"
+  echo "$l2" | grep -q '7d'    && ok "scoped: no cache → 7d still renders"  || bad "scoped: no cache → 7d still renders" "$l2"
+
+  # --- stamp-only cache (account with zero scoped windows) ---
+  printf '%s\n' "$NOW" > "$SCACHE"
+  l2=$(sl2 200)
+  echo "$l2" | grep -q '7d' && ok "scoped: stamp-only cache renders line 2 normally" \
+                            || bad "scoped: stamp-only cache renders line 2 normally" "$l2"
+
+  # --- a torn cache row must be SKIPPED, silently, without blanking line 2 ---
+  # Dropping the row is the point: without the int-guard, `abc` reaches
+  # `printf '%.0f'` (stderr noise on every render) and `2.5` renders as a
+  # confident "2%" that no writer of ours ever produced. Assert both the missing
+  # segment AND the silent stderr, or the guard can be deleted with tests green.
+  for torn in '2.5 123 Fable' 'abc 123 Fable' '2' ''; do
+    printf '%s\n%s\n' "$NOW" "$torn" > "$SCACHE"
+    err=$(COLUMNS=200 HOME="$SHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>&1 >/dev/null)
+    out=$(COLUMNS=200 HOME="$SHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+    echo "$out" | sed -n '2p' | grep -q 'ctx' \
+      && ok "scoped: torn row '$torn' → line 2 survives" \
+      || bad "scoped: torn row '$torn' → line 2 survives" "$out"
+    # Grep the ICON, not the name: a row torn to just "2" has no name to find,
+    # and a missing empty-name guard would happily render a nameless "🤖 2%".
+    echo "$out" | grep -q "$SCOPED_ICON" \
+      && bad "scoped: torn row '$torn' → row must be skipped, not rendered" "$out" \
+      || ok "scoped: torn row '$torn' → row skipped"
+    [ -z "$err" ] && ok "scoped: torn row '$torn' → renders silently" \
+                  || bad "scoped: torn row '$torn' → renders silently" "stderr: $err"
+  done
+
+  # A non-integer resets epoch is TOLERATED (not skipped): the window is real,
+  # only its countdown is unknown. Render the pct, hide ↻.
+  printf '%s\n2 notanepoch Fable\n' "$NOW" > "$SCACHE"
+  l2=$(sl2 200)
+  echo "$l2" | grep -q 'Fable' && ok "scoped: bad reset epoch → window still renders" \
+                               || bad "scoped: bad reset epoch → window still renders" "$l2"
+  s=$(seg_after "$l2" Fable)
+  echo "$s" | grep -q '↻' && bad "scoped: bad reset epoch → ↻ hidden" "$s" \
+                          || ok "scoped: bad reset epoch → ↻ hidden"
+
+  # --- the stamp is the one FATAL-arith surface: it feeds a top-level $(( )) ---
+  # Under dash a non-integer operand aborts the whole script, blanking lines 2
+  # AND 3 — not merely skipping this segment (feedback_dash_arith_fatal_on_noninteger).
+  # bash only warns, so this must run under real dash where the platform ships it.
+  if command -v dash >/dev/null 2>&1; then
+    for stamp in 'not-an-epoch' '1.5' ''; do
+      printf '%s\n2 %s Fable\n' "$stamp" "$FUTURE" > "$SCACHE"
+      dout=$(COLUMNS=200 HOME="$SHOME" MEMORY_PACK_NERDFONT=0 dash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+      dlc=$(printf '%s\n' "$dout" | wc -l | tr -d ' ')
+      [ "$dlc" = "3" ] && ok "scoped: torn stamp '$stamp' → dash renders all 3 lines" \
+                       || bad "scoped: torn stamp '$stamp' → dash renders all 3 lines" "got $dlc lines"
+    done
+  fi
+
+  # --- a torn STAMP must not blank the render either ---
+  printf 'not-an-epoch\n2 %s Fable\n' "$FUTURE" > "$SCACHE"
+  out=$(COLUMNS=200 HOME="$SHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out" | sed -n '2p' | grep -q 'ctx' && ok "scoped: torn stamp → line 2 survives" \
+                                            || bad "scoped: torn stamp → line 2 survives" "$out"
+  echo "$out" | sed -n '2p' | grep -q 'Fable' && bad "scoped: torn stamp → segment dropped (age unknowable)" \
+                                              || ok "scoped: torn stamp → segment dropped (age unknowable)"
 fi
 
 echo "----"

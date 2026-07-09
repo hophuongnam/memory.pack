@@ -259,8 +259,21 @@ pill="$(ansi_bg "$anchor")$(ansi_fg "$pill_fg") ${pill_label} ${RESET}"
 format_pct() {
   label="$1"; val="$2"; reset_epoch="$3"
   warn_at="${4:-50}"; crit_at="${5:-80}"; bar_width="${6:-10}"
-  [ "$mode" = "medium" ] && bar_width=6
-  [ "$mode" = "narrow" ] && bar_width=0
+  compact="${7:-}"
+  # `bare` = percentage only, no bar and no ↻ countdown. Narrow always renders
+  # bare. `compact` callers (the per-model scoped windows) also render bare in
+  # MEDIUM: ctx+5h+7d already spend ~66 of medium's 80 columns at bar width 6,
+  # so a fourth full-width segment wraps line 2. Rendering the number instead of
+  # dropping the segment keeps a maxed window visible on a split pane — which is
+  # the one moment it matters.
+  bare=""
+  if [ -n "$compact" ] && [ "$mode" != "full" ]; then
+    bare=1; bar_width=0
+  else
+    [ "$mode" = "medium" ] && bar_width=6
+    [ "$mode" = "narrow" ] && bar_width=0
+  fi
+  [ "$mode" = "narrow" ] && bare=1
   pct=$(printf '%.0f' "$val")
   if   [ "$pct" -ge "$crit_at" ] 2>/dev/null; then fill="$THEME_BAR_FILL_ALERT"
   elif [ "$pct" -ge "$warn_at" ] 2>/dev/null; then fill="$THEME_BAR_FILL_WARN"
@@ -277,11 +290,11 @@ format_pct() {
     i=$((i+1))
   done
   reset_str=""
-  if [ -n "$reset_epoch" ] && [ "$mode" != "narrow" ]; then
+  if [ -n "$reset_epoch" ] && [ -z "$bare" ]; then
     r=$(format_reset "$reset_epoch")
     [ -n "$r" ] && reset_str=" \033[2m↻${r}${RESET}"
   fi
-  if [ "$mode" = "narrow" ]; then
+  if [ -n "$bare" ]; then
     printf "%s %s%s%%%%${RESET}" "$label" "$fill_ansi" "$pct"
   else
     printf "%s %s%s%%%%${RESET} %s${RESET}%s" "$label" "$fill_ansi" "$pct" "$bar" "$reset_str"
@@ -436,6 +449,50 @@ if [ -n "$seven_d" ]; then
       ;;
   esac
   parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
+fi
+
+# --- Per-model ("scoped") usage windows ---
+# CC's stdin carries only the COMBINED five_hour/seven_day windows, so the
+# per-model weekly windows (e.g. Fable) come from fetch-usage.sh's cache:
+#     <fetch_epoch>
+#     <pct> <resets_epoch> <display name>     ...one line per window
+# Read with a plain shell `read` — NO jq, preserving the ≤3-fork render budget
+# the one-pass stdin extraction was built for. The display name is the LAST
+# field so `read` slurps names containing spaces ("Claude Opus 4.8") whole.
+#
+# Only the PERCENTAGE goes stale: ↻ is recomputed live from <resets_epoch> on
+# every render. Past 24h the percentage is meaningless, so the segment is
+# DROPPED rather than rendered — a wrong number is worse than no number. An
+# unparseable stamp means the age is unknowable, which is the same thing.
+#
+# The STAMP guard is the fatal one: <fetch_epoch> feeds a top-level $(( )), and
+# under dash (Linux /bin/sh) a non-integer operand aborts the whole script —
+# blanking lines 2 AND 3 of every render, not merely skipping this segment
+# (feedback_dash_arith_fatal_on_noninteger). The per-row guards are not fatal;
+# they exist so a torn row is SKIPPED rather than rendered as a confident lie
+# ("2.5" would round to a "2%" no writer of ours produced) and so garbage never
+# reaches printf '%.0f', which noisily fails on stderr every single render.
+USAGE_CACHE="$HOOK_STATE_DIR/usage_scoped"
+if [ -f "$USAGE_CACHE" ]; then
+  {
+    u_stamp=""
+    read -r u_stamp || u_stamp=""
+    case "$u_stamp" in ''|*[!0-9]*) u_stamp=0 ;; esac
+    u_age=$(( now - u_stamp ))
+    if [ "$u_stamp" -gt 0 ] && [ "$u_age" -ge 0 ] && [ "$u_age" -lt 86400 ]; then
+      while read -r u_pct u_reset u_name; do
+        case "$u_pct"   in ''|*[!0-9]*) continue ;; esac
+        case "$u_reset" in ''|*[!0-9]*) u_reset=0 ;; esac
+        [ -n "$u_name" ] || continue
+        # epoch 0 = the API sent no resets_at; hide ↻ rather than print "now".
+        [ "$u_reset" = 0 ] && u_reset=""
+        [ -n "$parts" ] && parts="${parts}${sep}"
+        parts="${parts}$(format_pct \
+          "$(ansi_fg "$THEME_FG_SCOPED_ICON")${ICON_SCOPED}${RESET} ${u_name}" \
+          "$u_pct" "$u_reset" 80 90 10 compact)"
+      done
+    fi
+  } < "$USAGE_CACHE"
 fi
 # $parts is used AS the printf FORMAT string — format_pct must emit %%%% (not %)
 # for literal %, and \033 literals (not real ESC) for ANSI escapes, so this

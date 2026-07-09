@@ -32,10 +32,10 @@ clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Architecture
 
-**13 hook registrations** (canonical list: `install/hooks.manifest.json`):
+**14 hook registrations** (canonical list: `install/hooks.manifest.json`):
 `SessionStart`→boot-inject; `UserPromptSubmit`→boot-inject + memory-search-inject;
 `SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
-log-token-rate; `PostToolUse` (matcher-less, all tools)→boot-catchup,
+log-token-rate + fetch-usage; `PostToolUse` (matcher-less, all tools)→boot-catchup,
 Read→memory-recall, Write→archive-resurrect + memory-index-update,
 Edit/MultiEdit→memory-index-update. Boot context is thus injected at THREE
 sites — SessionStart (polls 4s), UserPromptSubmit (polls 9s), and
@@ -106,6 +106,32 @@ writes `sessions.log.md`/`SESSIONS.md`. (c) `replay.mjs` pass 2 writes
 auto-promotes archived→active at `recall_count>=3`. The CC harness
 auto-stamps `originSessionId` on every memory Write/Edit — legitimate,
 never strip it.
+
+**Per-model usage segment** (`fetch-usage.sh` → `fetch-usage-worker.sh`):
+CC's statusline stdin carries only the COMBINED `five_hour`/`seven_day`
+windows — never a per-model breakdown. The per-model weekly windows (e.g.
+Fable) exist only in Anthropic's OAuth usage endpoint
+(`api.anthropic.com/api/oauth/usage`, `anthropic-beta: oauth-2025-04-20`),
+in a newer `limits[]` array whose per-model entries are exactly those with a
+`scope.model.display_name` — filter on that PRESENCE, never on
+`kind=="weekly_scoped"` and never on the literal `"Fable"`, or a model
+rename silently empties the segment. The launcher TTL-gates (120s) and
+`nohup`-detaches; the worker reads the ACTIVE account's token (macOS
+Keychain `Claude Code-credentials`, else plaintext `.credentials.json`),
+curls, and atomically replaces `hook_state/usage_scoped`:
+`<fetch_epoch>\n<pct> <resets_epoch> <display name>` (name LAST so a plain
+`read` slurps spaces; the stamp line is load-bearing — it is what the TTL
+gate compares against, and it lands even for an account with ZERO scoped
+windows, which would otherwise re-fetch every turn). The token rides a curl
+CONFIG FILE on stdin (`curl --config -`), NEVER argv — `-H "…Bearer $tok"`
+publishes a live OAuth token to `ps aux`. **No token refresh, ever**: we
+only read the token CC itself owns and keeps fresh, so an expired token just
+skips the tick (no `invalid_grant` quarantine, no 401-retry, no persist
+callback — ~150 lines of claude-swap we never write). Any failure (no token,
+network, changed shape) leaves the last-good cache UNTOUCHED and exits 2;
+statusline renders it stale and drops the segment past 24h rather than lie.
+Undocumented endpoint: when `limits[]` changes shape the segment vanishes
+quietly — the tests pin OUR parser, not their schema.
 
 **FTS5 search** (`index/`): `index-memories.py` walks all
 `~/.claude/projects/*/memory/**/*.md` → SQLite `search.db` (gitignored,
@@ -181,7 +207,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-24 suites in `tests/` — run all before any commit (CI mirrors the same
+25 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
 fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
 suites fail:
@@ -222,6 +248,15 @@ write them — self-located via the symlink, BSD-safe bare `readlink`, no
 hardcoded Resilio path; structural + behavioral-via-symlink + a
 pending/booted contents mutation; the reader↔writer path-parity analog of
 invariant #2, silent on relocated installs),
+`test_statusline_render`'s scoped-segment cluster (per-model windows on line
+2: bar + ↻ in full, percentage-only in medium/narrow via `format_pct`'s
+`compact` arg — medium already spends ~66 of 80 columns on ctx/5h/7d, and
+dropping the segment instead would hide a MAXED window on a split pane; the
+24h hard-drop boundary; the epoch-0 sentinel hiding ↻ rather than printing
+"now"; torn rows SKIPPED silently — asserted by grepping the ICON, since a
+row torn to just "2" has no name to grep and a missing empty-name guard
+renders a nameless pill; and a torn STAMP under real dash, the one FATAL
+arithmetic surface, which must still render all 3 lines),
 `test_slug_anchored_to_transcript_path` (PROJECT_HASH must derive from
 CC's per-session slug = `basename(dirname(transcript_path))` walked back
 up from cwd, not from the live cwd that follows mid-session `cd` — pins
@@ -317,6 +352,20 @@ newest samples surviving; boot-inject SessionStart sweeps legacy
 created/recall_count inherit and last_reviewed stamps; malformed files
 untouched; pins the shared `fmParse`/`fmSetInPlace`/`fmSerialize` in
 `_lib.mjs` consumed by BOTH update-recall.mjs and archive-resurrect.mjs),
+`test_fetch_usage` (the per-model usage refresh: `security` AND `curl` both
+shadowed by PATH stubs that RECORD their invocation, so a hook reaching the
+real binary by absolute path fails the suite loudly instead of silently
+hitting api.anthropic.com with a live OAuth token. Layer 1 stubs the worker
+and drives the launcher's TTL gate — fresh cache must NOT spawn, stale and
+corrupt-stamp must, and a corrupt stamp must not reach `$(( ))` (run under
+real dash: fatal there, merely noisy under bash). Layer 2 drives the REAL
+worker synchronously — happy path, token ABSENT from curl argv but present
+in the stdin config, curl failure / malformed JSON / missing `limits[]` all
+leave the last-good cache byte-identical, zero-scoped-window accounts get a
+stamp-only cache, a display name with spaces survives `read` because name is
+the LAST field, missing `resets_at` → epoch-0 sentinel, no tmp litter, token
+never persisted. Mutation-pinned in four directions: TTL gate, dash
+int-guard, token-into-argv, clobber-on-parse-failure),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
 `.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs
