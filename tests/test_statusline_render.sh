@@ -130,6 +130,65 @@ if [ -f "$ICONS" ]; then
   done
 fi
 
+# ─── ICON_* codepoint pins ────────────────────────────────────────────────
+# A wrong Nerd PUA codepoint yields a legitimate glyph, just the WRONG one:
+# nothing errors and an "icon is non-empty" assertion passes. That shipped four
+# times (see feedback_verify_nerd_glyph_codepoints_against_font). Pin the value.
+# NO PUA literal appears in this source — BMP PUA is silently stripped by some
+# markdown/editor roundtrips (feedback_bmp_pua_stripped_in_markdown_roundtrips),
+# so resolve the icon through the real table and compare ord() to a hex literal.
+if [ -f "$ICONS" ]; then
+  icon_cp() {  # $1 = ICON_* var name -> "U+XXXXX", or "LEN<n>" if not 1 char
+    sh -c '. "$1" && . "$2" && MEMORY_PACK_NERDFONT=1 . "$3" && printf "%s" "${'"$1"':-}"' \
+      _ "$HOOKS/_lib.sh" "$THEME" "$ICONS" \
+    | python3 -c 'import sys
+s = sys.stdin.buffer.read().decode("utf-8")
+print("U+%05X" % ord(s) if len(s) == 1 else "LEN%d" % len(s))'
+  }
+  # name:codepoint:real glyph name in the font (verified w/ fontTools, 190 fonts)
+  for pin in "ICON_5H:U+F13AB:md-timer" \
+             "ICON_7D:U+F00F0:md-calendar_clock" \
+             "ICON_SCOPED:U+F06A9:md-robot" \
+             "ICON_MEMORY:U+F09D1:md-brain" \
+             "ICON_BRANCH:U+0E0A0:pl-branch" \
+             "ICON_DIRTY:U+025CF:BLACK CIRCLE"; do
+    iname=${pin%%:*}; rest=${pin#*:}; want=${rest%%:*}; glyph=${rest#*:}
+    got=$(icon_cp "$iname")
+    [ "$got" = "$want" ] && ok "$iname == $want ($glyph)" \
+                         || bad "$iname == $want ($glyph)" "got $got"
+  done
+
+  # The glyph-reference comment block must not lie about codepoints. We cannot
+  # check the glyph NAME without a font on the box (CI has none), but we CAN
+  # machine-check that every `ICON_X  U+YYYYY` line agrees with the Nerd-table
+  # assignment below it — half the lying-comment class, killed for free.
+  cmt=$(python3 - "$ICONS" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+commented = dict(re.findall(r'^#\s+(ICON_\w+)\s+U\+([0-9A-Fa-f]{4,5})\s', src, re.M))
+nerd = src.split("if _mp_have_nerdfont", 1)[1].split("\nelse", 1)[0]
+assigned = dict(re.findall(r'^\s*(ICON_\w+)="(.*)"\s*$', nerd, re.M))
+bad = []
+for icon, hexcp in commented.items():
+    if icon not in assigned:
+        bad.append(f"{icon}: documented but not assigned in the Nerd table"); continue
+    val = assigned[icon]
+    if not val:
+        continue  # intentionally empty (none today)
+    if len(val) != 1:
+        bad.append(f"{icon}: assignment is {len(val)} chars, not one glyph"); continue
+    if ord(val) != int(hexcp, 16):
+        bad.append(f"{icon}: comment says U+{hexcp.upper()}, assignment is U+{ord(val):05X}")
+for icon in assigned:
+    if assigned[icon] and icon not in commented:
+        bad.append(f"{icon}: assigned but missing from the glyph-reference comment")
+print("; ".join(bad))
+PY
+)
+  [ -z "$cmt" ] && ok "glyph-reference comment matches every Nerd assignment" \
+                || bad "glyph-reference comment matches every Nerd assignment" "$cmt"
+fi
+
 # ─── mp_pill_fg luminance flip ────────────────────────────────────────────
 RENDER="$HOOKS/statusline-render.sh"
 [ -f "$RENDER" ] || bad "hooks/statusline-render.sh exists"
