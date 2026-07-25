@@ -85,10 +85,19 @@ drained a whole 5h usage window. Both passes now pass `settingSources: []`
 SDK child and every hook IT spawns — which `session-end.sh`, `boot-inject.sh`,
 `auto-save-stop.sh` and `memory-search-inject.sh` exit 0 on (the belt, so an
 SDK default change can't re-open it; boot-inject's matters most — a child
-otherwise CONSUMES the real next session's boot context). A limit-shaped
-throw or result in pass 1 exits 2, not 3: a quota outage carries the prior
-context forward silently instead of spamming "Replay failed" per session end.
-Pinned by `test_replay_extraction` + `test_session_end_launcher`.
+otherwise CONSUMES the real next session's boot context). A usage-limit
+signal in pass 1 exits 2, not 3, so a quota outage carries the prior context
+forward silently instead of spamming "Replay failed" per session end —
+classified by `_lib.mjs isUsageLimitSignal` (pure + unit-tested) off the
+REAL SDK shapes: `terminal_reason: 'blocking_limit'`/`'rapid_refill_breaker'`,
+a `rate_limit_event` whose `rate_limit_info.status` is `rejected` (NOT
+`allowed_warning` — still being served), or limit text in `errors[]` /
+a thrown process error's message (the SDK appends the stderr tail to
+"Claude Code process exited with code N"). `SDKResultError` has NO
+`result`/`error` field — regexing those was prod-dead. Deliberately TIGHT
+and asymmetric: calling a real crash benign hides it forever, calling an
+outage a crash only costs a banner. Pinned by `test_replay_extraction` +
+`test_session_end_launcher`.
 
 **Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
 `SAVE_INTERVAL=10` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
@@ -355,7 +364,10 @@ stays honest — independent `"<turns> <relevant>"` baselines in
 `test_replay_extraction` (`extractConversation`: isMeta string/array
 exclusion, tool_result exclusion, array-text prompt inclusion;
 `truncateConversation`: head/tail preservation + elision marker + default
-caps; structural pin that replay.mjs consumes both; plus the loop-breaker —
+caps; `isUsageLimitSignal`: 12 cases over shapes read off the installed
+`sdk.d.ts`, the NEGATIVES load-bearing — `error_max_turns`, `api_error`,
+ENOENT, a missing SDK and an `allowed_warning` event must all stay exit 3,
+mutation-pinned against a too-broad classifier; plus the loop-breaker —
 `settingSources: []` COUNTED at exactly 2 (one per pass) and the
 `MP_REPLAY_CHILD` export present, both against comment-STRIPPED source,
 since the prose describing each guard would otherwise satisfy a

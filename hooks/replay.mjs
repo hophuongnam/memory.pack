@@ -10,7 +10,7 @@
 //      ~/.claude/projects/<slug>/memory/PENDING_MEMORIES.md for human-in-the-
 //      loop review by a future session.
 
-import { resolveSdkSpecifier, extractConversation, truncateConversation } from './_lib.mjs';
+import { resolveSdkSpecifier, extractConversation, truncateConversation, isUsageLimitSignal } from './_lib.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -115,7 +115,10 @@ const recentSessionsBlock = recentSessions
 // ───────────────────────────────────────────────────────────────────────
 let bootContext = '';
 let lastResultSubtype = '';
-let lastResultError = '';
+// Set by any streamed signal isUsageLimitSignal() recognizes — a rejecting
+// rate_limit_event or an error result whose terminal_reason/errors[] say the
+// window is blocked. Distinguishes "quota outage" (benign) from "crash".
+let hitUsageLimit = false;
 // Collect any assistant text that streams through — used as a fallback
 // when the result message doesn't arrive (e.g. error_max_turns). This way
 // a near-complete answer still produces a boot context instead of getting
@@ -172,11 +175,13 @@ ${transcript}`,
     lastResultSubtype = message.subtype || '';
     if (message.subtype === 'success') {
       bootContext = message.result || '';
-    } else {
-      // Error subtypes surface their reason here in some SDK versions —
-      // captured for the limit-detection below.
-      lastResultError = String(message.result ?? message.error ?? '');
+    } else if (isUsageLimitSignal(message)) {
+      hitUsageLimit = true;
     }
+  } else if (isUsageLimitSignal(message)) {
+    // A rejecting rate_limit_event streams BEFORE the result — the window is
+    // blocked, so whatever result follows is an outage, not a crash.
+    hitUsageLimit = true;
   }
 }
 } catch (err) {
@@ -187,8 +192,7 @@ ${transcript}`,
   // synthetic error banner + notification still surface it. Keeps a
   // quota-exhausted window from spamming "Replay failed" per session end
   // (observed 2026-07-25 after the replay chain drained the 5h window).
-  const errText = `${err?.message || err} ${err?.stderr || ''} ${err?.stdout || ''}`;
-  if (/limit reached|usage limit|rate.?limit|quota|429|overloaded/i.test(errText)) {
+  if (isUsageLimitSignal(err)) {
     bail(2, `pass 1 hit a usage/rate limit — carrying prior boot context forward: ${String(err?.message || err).slice(0, 300)}`);
   }
   bail(3, `pass 1 SDK query threw: ${String(err?.message || err).slice(0, 300)}`);
@@ -206,8 +210,8 @@ if (!bootContext && /TITLE:/i.test(fallbackAssistantText) && /SUMMARY:/i.test(fa
 if (!bootContext) {
   // A limit-shaped in-stream error is the same benign outage as a thrown
   // one (catch above): carry forward, and skip pass 2's doomed API call.
-  if (/limit reached|usage limit|rate.?limit|quota|429|overloaded/i.test(lastResultError)) {
-    bail(2, `pass 1 result reported a usage/rate limit — carrying prior boot context forward: ${lastResultError.slice(0, 300)}`);
+  if (hitUsageLimit) {
+    bail(2, `pass 1 reported a usage/rate limit (subtype: ${lastResultSubtype || 'none'}) — carrying prior boot context forward`);
   }
   // Don't bail yet — pass 2 may still produce useful proposals. Record the
   // reason so the final empty-output guard below can surface it.

@@ -159,6 +159,41 @@ export function truncateConversation(text, { head = 30_000, tail = 170_000 } = {
   );
 }
 
+// Is this SDK signal a usage/rate-limit outage — benign, so replay.mjs exits
+// 2 and session-end.sh carries the prior boot context forward — rather than a
+// real failure (exit 3, synthetic "Replay failed" banner)? Accepts either a
+// streamed SDK message or a thrown error.
+//
+// Field names are read off the installed sdk.d.ts, not guessed: SDKResultError
+// carries `terminal_reason` (a typed enum incl. 'blocking_limit') and
+// `errors: string[]`, and has NO `result`/`error` field — the first cut
+// regexed `message.result ?? message.error` and could never match. A blocked
+// window also streams a dedicated `rate_limit_event`. Thrown process errors
+// have no structure at all, so those fall back to text: the SDK throws
+// "Claude Code process exited with code N" with the stderr tail appended.
+//
+// Deliberately TIGHT. The two errors are not symmetric: calling a real crash
+// benign hides it forever (this engine's failure mode is silence), while
+// calling an outage a crash only costs a banner. When unsure, return false.
+export function isUsageLimitSignal(x) {
+  if (!x || typeof x !== 'object') return false;
+
+  // Only an actual rejection is an outage — 'allowed_warning' means we are
+  // near the cap but still being served.
+  if (x.type === 'rate_limit_event') {
+    return x.rate_limit_info?.status === 'rejected' ||
+           x.rate_limit_info?.overageStatus === 'rejected';
+  }
+  if (x.terminal_reason === 'blocking_limit' ||
+      x.terminal_reason === 'rapid_refill_breaker') return true;
+
+  const text = [...(Array.isArray(x.errors) ? x.errors : []), x.message, x.stderr, x.stdout]
+    .filter((s) => typeof s === 'string')
+    .join(' ');
+  // No 'overloaded': a 529 is a transient server fault that should stay loud.
+  return /limit reached|usage limit|rate.?limit|quota|\b429\b/i.test(text);
+}
+
 // Resolve an importable specifier for @anthropic-ai/claude-agent-sdk.
 // replay.mjs previously hardcoded the macOS Homebrew absolute path, which
 // does not exist on Linux. Precedence:

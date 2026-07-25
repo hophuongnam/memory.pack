@@ -29,7 +29,7 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIB = join(HERE, '..', 'hooks', '_lib.mjs');
 
-const { extractConversation, truncateConversation } = await import(LIB);
+const { extractConversation, truncateConversation, isUsageLimitSignal } = await import(LIB);
 
 let fail = 0;
 const ok = (m) => console.log('PASS  ' + m);
@@ -139,6 +139,49 @@ check('both replay passes use the sonnet alias', aliasHits === 2, `found ${alias
 check('no pinned claude-sonnet-* model ID in code', !/claude-sonnet-/.test(replaySrc),
   'pinned Sonnet ID present — use the bare alias');
 
+// ─── isUsageLimitSignal: benign outage vs real failure ──────────────────
+// replay.mjs exits 2 (benign → session-end carries the prior boot context
+// forward) on a usage-window outage and 3 (loud synthetic banner) on a real
+// crash. Getting this backwards is asymmetric: a misread crash is hidden
+// forever, a misread outage only costs a "Replay failed" banner. So the
+// NEGATIVE cases below are the load-bearing ones.
+//
+// Shapes are read off the installed SDK's sdk.d.ts, not invented
+// (feedback_inspect_real_data_before_tdd_fixtures): SDKResultError carries
+// `terminal_reason` + `errors: string[]` and has NO `result`/`error` field —
+// the first cut regexed `message.result ?? message.error` and was prod-dead.
+const limitCases = [
+  // positives
+  [{ type: 'result', subtype: 'error_during_execution', terminal_reason: 'blocking_limit' }, true,
+    'result terminal_reason=blocking_limit'],
+  [{ type: 'result', subtype: 'error_during_execution', terminal_reason: 'rapid_refill_breaker' }, true,
+    'result terminal_reason=rapid_refill_breaker'],
+  [{ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' } }, true,
+    'rate_limit_event status=rejected'],
+  [{ type: 'result', subtype: 'error_during_execution',
+     errors: ['Claude AI usage limit reached|1753488000'] }, true,
+    'result errors[] carries the CLI limit string'],
+  [new Error('Claude Code process exited with code 1\nClaude AI usage limit reached|1753488000'), true,
+    'thrown process error whose message embeds the stderr limit tail'],
+  // negatives — these MUST stay exit 3
+  [{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', utilization: 0.9 } }, false,
+    'near the cap but still being served is not an outage'],
+  [{ type: 'result', subtype: 'error_max_turns', errors: [] }, false,
+    'error_max_turns is a real replay failure'],
+  [{ type: 'result', subtype: 'error_during_execution', terminal_reason: 'api_error' }, false,
+    'api_error must stay loud'],
+  [new Error('ENOENT: no such file or directory, open \'/nope/transcript.jsonl\''), false,
+    'ENOENT is a real crash'],
+  [new Error('Cannot find module \'@anthropic-ai/claude-agent-sdk\''), false,
+    'missing SDK is a real crash'],
+  [null, false, 'null'],
+  [undefined, false, 'undefined'],
+];
+for (const [input, want, label] of limitCases) {
+  check(`limit signal: ${label} → ${want}`, isUsageLimitSignal(input) === want,
+    `got ${isUsageLimitSignal(input)}, want ${want}`);
+}
+
 // ─── structural: the replay loop-breaker ────────────────────────────────
 // SDK 0.3.x flipped the settingSources default from isolation to
 // load-all-filesystem-settings, so every replay child ran the user's hooks:
@@ -155,6 +198,17 @@ check('both replay passes disable filesystem settings', settingHits === 2,
 check('replay.mjs marks its descendants with MP_REPLAY_CHILD',
   /process\.env\.MP_REPLAY_CHILD\s*=/.test(replaySrc),
   'env loop-breaker gone — hooks in SDK children cannot self-identify');
+
+// Both bail-2 sites must route through the tested classifier, and the
+// prod-dead field read that preceded it must not come back.
+const limitHits = (replaySrc.match(/isUsageLimitSignal\(/g) || []).length;
+check('replay.mjs classifies limits via the tested helper', limitHits >= 3,
+  `found ${limitHits}, want >=3 (thrown err, error result, streamed event)`);
+check('no inline limit regex left in replay.mjs', !/limit reached\|usage limit/.test(replaySrc),
+  'duplicate untested classifier — one of the two will drift');
+check('no read of the nonexistent result.error field',
+  !/message\.result\s*\?\?\s*message\.error/.test(replaySrc),
+  'SDKResultError has neither field — that branch can never fire');
 
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
