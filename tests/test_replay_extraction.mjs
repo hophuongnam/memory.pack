@@ -174,6 +174,12 @@ const limitCases = [
     'ENOENT is a real crash'],
   [new Error('Cannot find module \'@anthropic-ai/claude-agent-sdk\''), false,
     'missing SDK is a real crash'],
+  // An api_retry is a 429 the SDK is HANDLING — the request has not failed.
+  // Nested error text must not leak into the match if the classifier is ever
+  // "improved" to flatten error objects.
+  [{ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 3, error_status: 429,
+     error: { message: 'rate_limit_error: usage limit reached' } }, false,
+    'an api_retry the SDK is still retrying is not an outage'],
   [null, false, 'null'],
   [undefined, false, 'undefined'],
 ];
@@ -209,6 +215,14 @@ check('no inline limit regex left in replay.mjs', !/limit reached\|usage limit/.
 check('no read of the nonexistent result.error field',
   !/message\.result\s*\?\?\s*message\.error/.test(replaySrc),
   'SDKResultError has neither field — that branch can never fire');
+// The non-result limit branch must be gated on the message TYPE, not left to
+// catch every message that is neither assistant nor result. The SDK union is
+// ~40 types and growing (api_retry, informational, mirror_error all carry
+// error/content strings); an ungated branch is one new type away from calling
+// a real crash benign.
+check('non-result limit branch is gated on rate_limit_event',
+  /message\.type === 'rate_limit_event' && isUsageLimitSignal\(message\)/.test(replaySrc),
+  'ungated else-if — every future SDK message type is a false-positive candidate');
 
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }

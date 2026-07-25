@@ -178,9 +178,12 @@ ${transcript}`,
     } else if (isUsageLimitSignal(message)) {
       hitUsageLimit = true;
     }
-  } else if (isUsageLimitSignal(message)) {
+  } else if (message.type === 'rate_limit_event' && isUsageLimitSignal(message)) {
     // A rejecting rate_limit_event streams BEFORE the result — the window is
-    // blocked, so whatever result follows is an outage, not a crash.
+    // blocked, so whatever result follows is an outage, not a crash. Gated on
+    // the type: the SDK message union is ~40 types and growing, several
+    // carrying error/content strings (api_retry, mirror_error, informational),
+    // and an ungated branch would eventually call a real crash benign.
     hitUsageLimit = true;
   }
 }
