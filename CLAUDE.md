@@ -210,7 +210,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-25 suites in `tests/` — run all before any commit (CI mirrors the same
+26 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
 fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
 suites fail:
@@ -234,7 +234,14 @@ size-capped `.archive-promote.log` rotation),
 `test_recall_frontmatter_preserve` (recall hook must NOT reshape
 frontmatter — runs the real `update-recall.mjs` + real Python
 `parse_frontmatter` against flat/nested/`node_type` fixtures; guards the
-silent-amnesia class), `test_inject_preamble_epistemic` (the
+silent-amnesia class), `test_frontmatter_shape_agnostic` (the WRITE-side
+sibling: the flat-frontmatter rule was retired 2026-07-10, so no code line
+in `hooks/`/`index/`/`skills/` may anchor a recognized frontmatter key at
+column 0 — a `grep '^type:'` silently misses the 42% of the corpus the
+harness nests. Structural scan + a mutation check that the scanner
+discriminates bad from tolerant forms + a doc-regression guard that
+`SCHEMA.md`'s normative body never re-grows the retired instruction while
+its history section keeps the epitaph), `test_inject_preamble_epistemic` (the
 memory-hint inject preamble must carry the verify-before-asserting
 epistemic clause, not just the relevance gate — structural-source pin
 for the *read-side* analog of the silent-amnesia class),
