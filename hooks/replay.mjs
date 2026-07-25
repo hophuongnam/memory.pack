@@ -131,7 +131,11 @@ TRANSCRIPT:
 ${transcript}`,
   options: {
     maxTurns: 6,
-    model: 'claude-sonnet-4-6',
+    // Bare alias, not a pinned ID: the SDK resolves 'sonnet' to whatever the
+    // installed agent-SDK considers the current Sonnet (claude-sonnet-4-6 as
+    // of SDK 0.2.77), so a Sonnet release doesn't leave replay on a stale
+    // model. Pinned by test_replay_extraction.
+    model: 'sonnet',
     systemPrompt: 'You are a session replay agent. Analyze the transcript and output the structured boot context on your first turn. No tool calls — just output text.',
     permissionMode: 'bypassPermissions',
     // Force text-only output. Without this the SDK enables the full Claude Code
@@ -253,7 +257,8 @@ ${transcript}`;
       prompt: promotionPrompt,
       options: {
         maxTurns: 6,
-        model: 'claude-sonnet-4-6',
+        // See pass-1 comment: bare alias so this tracks the latest Sonnet.
+        model: 'sonnet',
         systemPrompt: 'You are a strict memory-promotion agent. Default to NONE. Only emit proposals for durable, non-derivable, non-duplicate facts. No tool calls — text output only.',
         permissionMode: 'bypassPermissions',
         // See pass-1 comment: tools: [] forces the model to emit text instead

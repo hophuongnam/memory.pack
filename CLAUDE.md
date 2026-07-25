@@ -57,7 +57,10 @@ verified in bundle 2.1.181, see
 `reference_cc_posttooluse_additionalcontext` in the project store).
 
 **Two-pass replay** (`hooks/replay.mjs`, detached by `session-end.sh` via
-`nohup`/`disown`; model `claude-sonnet-4-6`, `maxTurns:6`, `tools:[]`):
+`nohup`/`disown`; model = the bare `sonnet` alias, resolved by whichever
+agent SDK `resolveSdkSpecifier` finds — NOT a pinned ID (pinned by
+`test_replay_extraction`), so it tracks the installed SDK's latest Sonnet and
+can differ per host; `maxTurns:6`, `tools:[]`):
 pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
 to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
 promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —

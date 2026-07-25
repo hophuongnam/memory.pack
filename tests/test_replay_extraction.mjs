@@ -129,6 +129,16 @@ check('replay.mjs no longer string-only on user content',
   !/typeof m\.message\?\.content === 'string'/.test(replaySrc),
   'old string-only check still present');
 
+// ─── structural: both passes ride the 'sonnet' alias, never a pinned ID ──
+// The SDK resolves the bare alias to the current latest Sonnet (verified
+// behaviorally against the real SDK: 'sonnet' → claude-sonnet-4-6 on
+// @anthropic-ai/claude-agent-sdk 0.2.77). A pinned ID silently freezes the
+// replay agent on a stale model at every future Sonnet release.
+const aliasHits = (replaySrc.match(/model:\s*'sonnet'/g) || []).length;
+check('both replay passes use the sonnet alias', aliasHits === 2, `found ${aliasHits}, want 2`);
+check('no pinned claude-sonnet-* model ID in code', !/claude-sonnet-/.test(replaySrc),
+  'pinned Sonnet ID present — use the bare alias');
+
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
 console.log(`${fail} FAILED`); process.exit(1);
