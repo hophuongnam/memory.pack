@@ -139,6 +139,23 @@ check('both replay passes use the sonnet alias', aliasHits === 2, `found ${alias
 check('no pinned claude-sonnet-* model ID in code', !/claude-sonnet-/.test(replaySrc),
   'pinned Sonnet ID present — use the bare alias');
 
+// ─── structural: the replay loop-breaker ────────────────────────────────
+// SDK 0.3.x flipped the settingSources default from isolation to
+// load-all-filesystem-settings, so every replay child ran the user's hooks:
+// its own SessionEnd re-entered session-end.sh, the substance gate rescued
+// it (1 turn but ≥25k chars of embedded transcript) and it replayed the
+// replay — ×2 per generation, one per pass below. Observed 2026-07-25
+// draining the whole 5h usage window. Both passes must opt out, and the
+// env marker is the belt for a future SDK default change.
+// Counted, not merely present: replaySrc is comment-stripped above, so a
+// deleted option line can't be masked by the prose that describes it.
+const settingHits = (replaySrc.match(/settingSources:\s*\[\s*\]/g) || []).length;
+check('both replay passes disable filesystem settings', settingHits === 2,
+  `found ${settingHits}, want 2 — a pass that loads settings runs our hooks and re-chains`);
+check('replay.mjs marks its descendants with MP_REPLAY_CHILD',
+  /process\.env\.MP_REPLAY_CHILD\s*=/.test(replaySrc),
+  'env loop-breaker gone — hooks in SDK children cannot self-identify');
+
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
 console.log(`${fail} FAILED`); process.exit(1);

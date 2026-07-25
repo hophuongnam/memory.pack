@@ -2,6 +2,10 @@
 # UserPromptSubmit hook — auto-search the auto-memory FTS5 index for
 # prompt-relevant hits and inject them as additionalContext.
 #
+# Skip replay children (MP_REPLAY_CHILD from replay.mjs): injecting memory
+# hits into a machine summarization prompt only burns tokens.
+[ -n "$MP_REPLAY_CHILD" ] && exit 0
+#
 # Why this exists: the manual /memory-search skill (and the search CLI)
 # are opt-in — they depend on Claude remembering to invoke them. The
 # whole point of choosing Tier 1 (FTS5 index + auto-trigger) over Tier 0

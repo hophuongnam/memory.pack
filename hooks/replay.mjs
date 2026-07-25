@@ -20,6 +20,16 @@ import { fileURLToPath } from 'node:url';
 // engine-local on Linux). Resolve portably instead of hardcoding a path.
 const { getSessionMessages, query } = await import(resolveSdkSpecifier());
 
+// Loop breaker: every descendant (SDK-spawned claude child and the hook
+// subprocesses IT spawns) inherits this. Memory.Pack hooks exit early when
+// set — without it, each SDK child's SessionEnd fired session-end.sh, whose
+// substance gate rescued the child (1 turn but ≥25k embedded-transcript
+// chars) and spawned a replay-of-the-replay: exponential fan-out ×2 per
+// generation (two query() passes below), observed 2026-07-25 burning the
+// whole 5h window in Mira. settingSources: [] below is the primary fix;
+// this survives an SDK default change.
+process.env.MP_REPLAY_CHILD = '1';
+
 // Exit codes:
 //   0 = success (boot context written to stdout)
 //   2 = benign no-op (no session id on argv — nothing to replay)
@@ -105,11 +115,13 @@ const recentSessionsBlock = recentSessions
 // ───────────────────────────────────────────────────────────────────────
 let bootContext = '';
 let lastResultSubtype = '';
+let lastResultError = '';
 // Collect any assistant text that streams through — used as a fallback
 // when the result message doesn't arrive (e.g. error_max_turns). This way
 // a near-complete answer still produces a boot context instead of getting
 // discarded and replaced by the synthetic "Replay failed" banner.
 let fallbackAssistantText = '';
+try {
 for await (const message of query({
   prompt: `You are a session replay agent. Read this transcript from a previous Claude Code session and produce a boot context for the next session.
 
@@ -143,6 +155,11 @@ ${transcript}`,
     // instead of emitting the summary — producing error_max_turns with nothing
     // streamed to recover from.
     tools: [],
+    // No filesystem settings in the child: with user settings loaded, the
+    // child ran every Memory.Pack hook — SessionEnd re-entered session-end.sh
+    // and chained replays of replays (see MP_REPLAY_CHILD above), and
+    // UserPromptSubmit injected memory-search hits into this machine prompt.
+    settingSources: [],
   }
 })) {
   if (message.type === 'assistant') {
@@ -155,8 +172,26 @@ ${transcript}`,
     lastResultSubtype = message.subtype || '';
     if (message.subtype === 'success') {
       bootContext = message.result || '';
+    } else {
+      // Error subtypes surface their reason here in some SDK versions —
+      // captured for the limit-detection below.
+      lastResultError = String(message.result ?? message.error ?? '');
     }
   }
+}
+} catch (err) {
+  // A thrown query (CLI child died before streaming a result) during a
+  // usage-window/rate-limit outage is a benign no-op, not a failure:
+  // exit 2 makes session-end.sh carry the prior boot context forward
+  // silently. Anything else stays a real failure (exit 3) so the
+  // synthetic error banner + notification still surface it. Keeps a
+  // quota-exhausted window from spamming "Replay failed" per session end
+  // (observed 2026-07-25 after the replay chain drained the 5h window).
+  const errText = `${err?.message || err} ${err?.stderr || ''} ${err?.stdout || ''}`;
+  if (/limit reached|usage limit|rate.?limit|quota|429|overloaded/i.test(errText)) {
+    bail(2, `pass 1 hit a usage/rate limit — carrying prior boot context forward: ${String(err?.message || err).slice(0, 300)}`);
+  }
+  bail(3, `pass 1 SDK query threw: ${String(err?.message || err).slice(0, 300)}`);
 }
 
 if (!bootContext && /TITLE:/i.test(fallbackAssistantText) && /SUMMARY:/i.test(fallbackAssistantText)) {
@@ -169,6 +204,11 @@ if (!bootContext && /TITLE:/i.test(fallbackAssistantText) && /SUMMARY:/i.test(fa
 }
 
 if (!bootContext) {
+  // A limit-shaped in-stream error is the same benign outage as a thrown
+  // one (catch above): carry forward, and skip pass 2's doomed API call.
+  if (/limit reached|usage limit|rate.?limit|quota|429|overloaded/i.test(lastResultError)) {
+    bail(2, `pass 1 result reported a usage/rate limit — carrying prior boot context forward: ${lastResultError.slice(0, 300)}`);
+  }
   // Don't bail yet — pass 2 may still produce useful proposals. Record the
   // reason so the final empty-output guard below can surface it.
   process.stderr.write(
@@ -264,6 +304,8 @@ ${transcript}`;
         // See pass-1 comment: tools: [] forces the model to emit text instead
         // of exploring via Read/Grep and hitting error_max_turns.
         tools: [],
+        // See pass-1 comment: no settings → no hooks → no replay chain.
+        settingSources: [],
       }
     })) {
       if (message.type === 'assistant') {

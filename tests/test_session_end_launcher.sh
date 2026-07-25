@@ -253,5 +253,43 @@ else
       "last=$(cat "$LAST6" 2>/dev/null | head -1)"
 fi
 
+# --- case 7: a replay child must never replay itself ------------------------
+# replay.mjs exports MP_REPLAY_CHILD=1, inherited by the SDK-spawned claude
+# child and every hook IT spawns. Without this guard the child's own SessionEnd
+# re-entered this script, the substance gate RESCUED it (1 real user turn but
+# ≥25k chars of embedded transcript) and it launched a replay of the replay —
+# ×2 per generation, one per replay.mjs pass. Self-amplifying: observed
+# 2026-07-25 draining the whole 5h usage window.
+PROJ7="$SBX/Child.Proj"
+mkdir -p "$PROJ7"
+HASH7=$(printf '%s' "$PROJ7" | _mp_hash)
+BC7="$ENGINE/.boot-context-${HASH7}"
+
+printf '{"session_id":"sid-child","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ7" "$PROJ7" \
+  | MP_REPLAY_CHILD=1 PATH="$STUB_OK:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+rc7=$?
+sleep 1
+[ "$rc7" -eq 0 ] \
+  && ok "replay child: session-end exits 0 (clean no-op)" \
+  || bad "replay child: session-end exits 0 (clean no-op)" "rc=$rc7"
+grep -q '^sid-child$' "$SBX/ok-invocations" 2>/dev/null \
+  && bad "replay child: replay NOT launched" "node stub invoked — the fan-out is live" \
+  || ok "replay child: replay NOT launched"
+[ ! -f "$BC7" ] \
+  && ok "replay child: no boot context written" \
+  || bad "replay child: no boot context written" "bc=$(head -1 "$BC7" 2>/dev/null)"
+
+# --- structural: every hook a replay child can reach carries the guard ------
+# Comment-stripped: the prose above each guard names MP_REPLAY_CHILD too, so
+# a presence-only grep would survive deleting the guard itself.
+for h in auto-save-stop.sh boot-inject.sh memory-search-inject.sh session-end.sh; do
+  if grep -v '^[[:space:]]*#' "$HOOKS/$h" | grep -q 'MP_REPLAY_CHILD.*exit 0'; then
+    ok "MP_REPLAY_CHILD guard is code, not comment: $h"
+  else
+    bad "MP_REPLAY_CHILD guard is code, not comment: $h" "replay children will run this hook"
+  fi
+done
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

@@ -2,6 +2,14 @@
 # SessionEnd hook: launch replay of ending session.
 # Replay runs detached via nohup; boot context written to .boot-context
 # for the boot-inject hook to inject on the next session's first turn.
+#
+# Never replay a replay: replay.mjs exports MP_REPLAY_CHILD=1 so its SDK
+# children — and the hook processes THEY spawn — inherit it. Without this
+# guard a child's own SessionEnd re-entered this script, the substance
+# gate rescued it (1 user turn but ≥25k chars of embedded transcript),
+# and replays chained exponentially, ×2 per generation (one per replay.mjs
+# pass) — observed 2026-07-25 draining the whole 5h usage window.
+[ -n "$MP_REPLAY_CHILD" ] && exit 0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh" || { echo "memory-pack: cannot source $SCRIPT_DIR/_lib.sh" >&2; exit 1; }
 

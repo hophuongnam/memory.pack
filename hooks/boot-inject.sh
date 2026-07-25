@@ -2,6 +2,11 @@
 # Inject boot context from previous session's replay.
 # Wired to both SessionStart (immediate) and UserPromptSubmit (fallback).
 # Checks for .boot-context written by session-end.sh.
+#
+# Replay children (MP_REPLAY_CHILD exported by replay.mjs) must not run
+# this: their SessionStart consumed the real next session's boot context
+# and littered .boot-marker files per chained child.
+[ -n "$MP_REPLAY_CHILD" ] && exit 0
 INPUT=$(cat)
 # Single jq call extracts all four fields together — each separate jq fork
 # is ~30-40ms on macOS, and four serial calls pushed the early marker write

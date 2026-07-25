@@ -1,6 +1,11 @@
 #!/bin/bash
 # AUTO-SAVE STOP HOOK — Save to internal memory every N exchanges
 #
+# Skip replay children (MP_REPLAY_CHILD from replay.mjs): blocking their
+# Stop forces extra turns re-reading the embedded transcript, and with
+# tools: [] they cannot save memories anyway.
+[ -n "$MP_REPLAY_CHILD" ] && exit 0
+#
 # Claude Code "Stop" hook. After every assistant response:
 # 1. Counts REAL human turns AND relevant-output chars since the last save
 # 2. Every SAVE_INTERVAL turns OR MP_AUTOSAVE_MIN_CHARS relevant-output chars,

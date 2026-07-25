@@ -60,7 +60,7 @@ verified in bundle 2.1.181, see
 `nohup`/`disown`; model = the bare `sonnet` alias, resolved by whichever
 agent SDK `resolveSdkSpecifier` finds — NOT a pinned ID (pinned by
 `test_replay_extraction`), so it tracks the installed SDK's latest Sonnet and
-can differ per host; `maxTurns:6`, `tools:[]`):
+can differ per host; `maxTurns:6`, `tools:[]`, `settingSources:[]`):
 pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
 to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
 promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —
@@ -74,6 +74,21 @@ boot-context embedding the per-project `.replay-error-<hash>.log` tail).
 The detached launcher passes every dynamic value via `env` into a STATIC
 single-quoted body — interpolation was a parse error for quoted project
 paths (silent amnesia for `Nam's Proj`-style dirs).
+**Never replay a replay** (loop-breaker, 2026-07-25): agent SDK 0.3.x
+defaults `settingSources` to load-ALL-filesystem-settings (0.2.x isolated),
+so after the 0.3.220 upgrade (`90c495e`) every replay child ran the user's
+hooks — its own SessionEnd re-entered `session-end.sh`, the substance gate
+RESCUED it (1 real user turn but ≥25k chars of embedded transcript) and it
+replayed the replay, ×2 per generation (one per pass). Self-amplifying: it
+drained a whole 5h usage window. Both passes now pass `settingSources: []`
+(primary fix), and replay.mjs sets `MP_REPLAY_CHILD=1` — inherited by the
+SDK child and every hook IT spawns — which `session-end.sh`, `boot-inject.sh`,
+`auto-save-stop.sh` and `memory-search-inject.sh` exit 0 on (the belt, so an
+SDK default change can't re-open it; boot-inject's matters most — a child
+otherwise CONSUMES the real next session's boot context). A limit-shaped
+throw or result in pass 1 exits 2, not 3: a quota outage carries the prior
+context forward silently instead of spamming "Replay failed" per session end.
+Pinned by `test_replay_extraction` + `test_session_end_launcher`.
 
 **Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
 `SAVE_INTERVAL=10` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
@@ -340,12 +355,20 @@ stays honest — independent `"<turns> <relevant>"` baselines in
 `test_replay_extraction` (`extractConversation`: isMeta string/array
 exclusion, tool_result exclusion, array-text prompt inclusion;
 `truncateConversation`: head/tail preservation + elision marker + default
-caps; structural pin that replay.mjs consumes both),
+caps; structural pin that replay.mjs consumes both; plus the loop-breaker —
+`settingSources: []` COUNTED at exactly 2 (one per pass) and the
+`MP_REPLAY_CHILD` export present, both against comment-STRIPPED source,
+since the prose describing each guard would otherwise satisfy a
+presence-only grep),
 `test_session_end_launcher` (quote-safe env-passing launcher: apostrophe
 project path still replays; failure path writes per-project
 `.replay-error-<hash>.log` + synthetic banner + exit marker; no fixed
 /tmp log; unique tmp.$$; skip-replay sentinel consumed one-shot with NO
-launch and carry-forward of the prior boot context),
+launch and carry-forward of the prior boot context; exit-2 benign no-op
+carries forward too; an unconsumed fresh context is snapshotted not
+destroyed; plus the loop-breaker behaviorally — `MP_REPLAY_CHILD=1` in the
+env means exit 0, NO launch, no boot context, and a comment-stripped scan
+that all four reachable hooks carry the guard as code),
 `test_memory_search_inject` (the FTS5 pipeline end-to-end: real indexer
 over a sandboxed store — build / nested-shape type resolution / archived
 status / incremental edit+delete sync — then the real inject hook via
