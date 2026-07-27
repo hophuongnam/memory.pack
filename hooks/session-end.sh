@@ -34,6 +34,15 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
 [ -z "$SESSION_ID" ] && exit 0
 
+# Orphan-backstop ledger: record that this session's end reached the handler,
+# BEFORE any branch below (launch, trivial-skip, skip-sentinel — all count as
+# handled). orphan-backstop.sh treats a quiet, post-baseline, UNSTAMPED
+# transcript as a crashed session and re-drives it through this script;
+# without an unconditional stamp every cleanly-ended session would look like
+# a crash and be replayed twice. GC'd by auto-save-stop.sh's 7-day sweep.
+mkdir -p "$HOME/.claude/hook_state" 2>/dev/null
+: > "$HOME/.claude/hook_state/${SESSION_ID}_end_handled"
+
 # Scope boot context + pid file per-project so project A's replay can't leak
 # into project B's next session. PROJECT_KEY is resolved against CC's
 # per-session slug (basename of dirname of transcript_path) so a mid-session

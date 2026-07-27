@@ -283,7 +283,7 @@ grep -q '^sid-child$' "$SBX/ok-invocations" 2>/dev/null \
 # --- structural: every hook a replay child can reach carries the guard ------
 # Comment-stripped: the prose above each guard names MP_REPLAY_CHILD too, so
 # a presence-only grep would survive deleting the guard itself.
-for h in auto-save-stop.sh boot-inject.sh memory-search-inject.sh session-end.sh; do
+for h in auto-save-stop.sh boot-inject.sh memory-search-inject.sh orphan-backstop.sh session-end.sh; do
   if grep -v '^[[:space:]]*#' "$HOOKS/$h" | grep -q 'MP_REPLAY_CHILD.*exit 0'; then
     ok "MP_REPLAY_CHILD guard is code, not comment: $h"
   else

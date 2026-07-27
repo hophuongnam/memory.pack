@@ -69,6 +69,35 @@ printf '{"session_id":"sid-gc-turns","stop_hook_active":false,"transcript_path":
   && ok "auto-save GC: fresh *_turns kept (mutation guard)" \
   || bad "auto-save GC: fresh *_turns kept" "sweep deleted fresh state"
 
+# --- 1a''. auto-save-stop: stale *_end_handled pruned, baseline immune -----
+# The orphan-backstop ledger (${sid}_end_handled, written by session-end.sh
+# on every handled end) shares the same one-file-per-session lifecycle, so it
+# joins the 7-day prune. orphan-baseline is NOT per-session — it is the
+# permanent "nothing before this instant is ever an orphan candidate" anchor;
+# pruning it would re-arm the backstop against every historical transcript
+# still inside the horizon (quota bleed + stale boot-context regressions).
+OLD_H="$STATE_DIR/oldsess_end_handled"
+FRESH_H="$STATE_DIR/freshsess_end_handled"
+BASE_H="$STATE_DIR/orphan-baseline"
+: > "$OLD_H"
+: > "$FRESH_H"
+: > "$BASE_H"
+python3 -c "import os, time; t = time.time() - 8*86400; os.utime('$OLD_H', (t, t)); os.utime('$BASE_H', (t, t))"
+
+printf '{"session_id":"sid-gc-handled","stop_hook_active":false,"transcript_path":"/nonexistent.jsonl"}' \
+  | bash "$HOOKS/auto-save-stop.sh" >/dev/null 2>&1
+
+[ ! -f "$OLD_H" ] \
+  && ok "auto-save GC: 8-day-old *_end_handled pruned" \
+  || bad "auto-save GC: 8-day-old *_end_handled pruned" "still present"
+[ -f "$FRESH_H" ] \
+  && ok "auto-save GC: fresh *_end_handled kept (mutation guard)" \
+  || bad "auto-save GC: fresh *_end_handled kept" "sweep deleted fresh state"
+[ -f "$BASE_H" ] \
+  && ok "auto-save GC: aged orphan-baseline NEVER pruned" \
+  || bad "auto-save GC: aged orphan-baseline NEVER pruned" "baseline swept — backstop re-armed against history"
+rm -f "$FRESH_H" "$BASE_H"
+
 # --- 1b. auto-save-stop: hook.log rotated past 512KB -----------------------
 LOG="$STATE_DIR/hook.log"
 : > "$LOG"

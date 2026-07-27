@@ -38,9 +38,12 @@ mkdir -p "$STATE_DIR"
 # days and rotate hook.log past 512KB down to its newest 500 lines.
 # tail+mv rotation can lose a concurrent Stop's log line — debug log only,
 # never engine state, so last-writer-wins is acceptable. Both per-session
-# state files (*_last_save + the statusline's *_turns countdown cache) share
-# this prune — same lifecycle, or *_turns would leak one file per session.
-find "$STATE_DIR" \( -name '*_last_save' -o -name '*_turns' \) -type f -mtime +7 -delete 2>/dev/null
+# state files (*_last_save + the statusline's *_turns countdown cache + the
+# orphan-backstop's *_end_handled ledger) share this prune — same
+# one-file-per-session lifecycle, or each would leak one file per session.
+# orphan-baseline deliberately matches NONE of these globs: it is the
+# permanent pre-feature exemption anchor, never per-session state.
+find "$STATE_DIR" \( -name '*_last_save' -o -name '*_turns' -o -name '*_end_handled' \) -type f -mtime +7 -delete 2>/dev/null
 if [ -f "$STATE_DIR/hook.log" ]; then
     _log_bytes=$(wc -c < "$STATE_DIR/hook.log" 2>/dev/null | tr -d ' ')
     if [ -n "$_log_bytes" ] && [ "$_log_bytes" -gt 524288 ] 2>/dev/null; then

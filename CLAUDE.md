@@ -32,8 +32,8 @@ clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Architecture
 
-**14 hook registrations** (canonical list: `install/hooks.manifest.json`):
-`SessionStart`→boot-inject; `UserPromptSubmit`→boot-inject + memory-search-inject;
+**15 hook registrations** (canonical list: `install/hooks.manifest.json`):
+`SessionStart`→boot-inject + orphan-backstop; `UserPromptSubmit`→boot-inject + memory-search-inject;
 `SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
 log-token-rate + fetch-usage; `PostToolUse` (matcher-less, all tools)→boot-catchup,
 Read→memory-recall, Write→archive-resurrect + memory-index-update,
@@ -98,6 +98,37 @@ a thrown process error's message (the SDK appends the stderr tail to
 and asymmetric: calling a real crash benign hides it forever, calling an
 outage a crash only costs a banner. Pinned by `test_replay_extraction` +
 `test_session_end_launcher`.
+
+**Crash-orphan backstop** (`hooks/orphan-backstop.sh`, SessionStart,
+2026-07-27): SessionEnd does NOT fire on abnormal termination
+(crash/force-quit/terminal closed), so before this a crashed session was
+never replayed — no boot context, no pending-memory mining. session-end.sh
+now stamps `~/.claude/hook_state/<sid>_end_handled` on EVERY invocation
+(launch, trivial-skip, skip-sentinel alike); the backstop detaches a sweep
+(hook mode exits instantly — the 5s SessionStart budget is never spent
+scanning) over ALL `~/.claude/projects/*/*.jsonl` and, per project, picks
+the newest transcript that is post-baseline (`hook_state/orphan-baseline`
+self-inits on first run — pre-feature history is exempt FOREVER),
+in-horizon (`MP_ORPHAN_HORIZON_MIN`, 3d), QUIET (`MP_ORPHAN_QUIET_MIN`,
+30min — the PRIMARY liveness signal: CC does NOT hold the transcript fd
+open between writes, verified 2026-07-27 lsof-on-live-transcript exits 1,
+so lsof runs only as an opportunistic extra veto; quiet fails SAFE),
+unstamped, not the current session, and not superseded by a newer STAMPED
+sibling (replaying an older orphan would REGRESS boot context). Its
+project key is recovered from cwd values INSIDE the transcript and
+accepted only if it slugifies back to the transcript's parent-dir slug
+(invariant #4 — never mis-file); a live `.skip-replay-<hash>` is honored
+but NOT consumed. Claim = noclobber `<sid>_end_handled` write (concurrent
+sweeps launch each orphan once), then it pipes synthesized SessionEnd
+stdin into the REAL session-end.sh — every existing gate reused, zero
+duplication — capped `MP_ORPHAN_MAX` (2) per sweep, newest-first. Pass 2
+re-scans after the quiet window to catch crash-then-immediate-restart
+(too fresh at SessionStart); when the replay lands, boot-catchup injects
+it into the very session that triggered the sweep. Idea from
+acdesigntech/memory-project's backstop (see
+`reference_acdesigntech_memory_project` in the project store); their
+lsof-primary liveness was rebuilt as quiet-window-primary after the fd
+assumption failed against real CC. Pinned by `test_orphan_backstop`.
 
 **Memory-write split (4 ways):** (a) `auto-save-stop.sh` blocks every
 `SAVE_INTERVAL=10` REAL user turns (`_mp_real_user_turns` in `_lib.sh`:
@@ -234,7 +265,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-26 suites in `tests/` — run all before any commit (CI mirrors the same
+27 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
 fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
 suites fail:
@@ -421,7 +452,23 @@ REAL boot-inject with an `EVENT=PostToolUse` stdin and asserts it emits
 carry-forward snapshot + injects nothing on the next tool call once the gate
 is dry; guards the mid-turn analog of the boot-context injection path — a
 slow prior-session replay landing after both poll windows must not leave a
-long turn blind).
+long turn blind),
+`test_orphan_backstop` (the crash-orphan sweep: Layer A pins session-end.sh
+stamping `<sid>_end_handled` on every handled path — launch, trivial-skip,
+skip-sentinel — mutation-verified; Layer B drives the real sweep with a
+RECORDING session-end stub: happy-path synthesized stdin field-exact,
+baseline self-init + pre-baseline exemption, quiet-window, horizon,
+current-session exclusion, stamped skip, newer-stamped-sibling supersede,
+newest-per-project, `MP_ORPHAN_MAX` cap with newest-first ordering,
+unverifiable-cwd skip-without-claim, lsof-veto mutation pair,
+skip-replay-sentinel honored-not-consumed, and two-pass claim idempotence
+— quiet/baseline/supersede/cwd-verify/ordering all mutation-verified;
+Layer C pins hook-mode routing incl. the MP_REPLAY_CHILD belt and
+camelCase-only stdin; Layer D pins the manifest registration, the
+noclobber claim, and the stamped-skip cost guard — that one structurally,
+since dropping it is behaviorally equivalent by design: the claim is the
+correctness belt, the filter only keeps handled transcripts away from the
+full-file jq cwd pass).
 Two accepted patterns for the side-effecting
 `.mjs`/`.sh` scripts (they can't be unit-imported): **structural
 source-regression** (`test_sdk_resolve.mjs:62` idiom) — scan code-only

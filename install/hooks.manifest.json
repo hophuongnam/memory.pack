@@ -2,6 +2,7 @@
   "_comment": "Canonical Memory.Pack hook registrations. install.sh merges these into ~/.claude/settings.json, rewriting command to $MEMORY_PACK_HOME/hooks/<script>. 'script' doubles as the ownership key for idempotent strip + uninstall. Captured from the reference install 2026-05-18.",
   "entries": [
     { "event": "SessionStart",                          "script": "boot-inject.sh",            "timeout": 5  },
+    { "event": "SessionStart",                          "script": "orphan-backstop.sh",        "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "boot-inject.sh",            "timeout": 10 },
     { "event": "PostToolUse",                            "script": "boot-catchup.sh",           "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "memory-search-inject.sh",   "timeout": 5  },
