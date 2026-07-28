@@ -64,7 +64,24 @@ can differ per host; `maxTurns:6`, `tools:[]`, `settingSources:[]`):
 pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
 to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
 promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —
-runs detached without read access to memory bodies). Transcript text comes
+runs detached without read access to memory bodies). **replay.mjs writes
+`.boot-context-<hash>` itself** (`$MP_BOOT_CTX`, write+rename) the moment
+pass 1 finishes, 2026-07-28: the launcher only renamed its stdout tmp at
+process EXIT, so a summary pass 1 already had waited out pass 2's whole
+second agent call (measured 4m58s end-to-end on a 520KB transcript). Exit
+0 with EMPTY stdout is therefore the normal success shape — the launcher's
+old `-s "$MP_TMP"` gate stamped the "Replay failed" banner over a good
+context; stdout survives as the fallback for a manual run. **Coupling:**
+dropping that gate means the launcher can no longer detect "exit 0 but
+nothing produced" — that guarantee now lives ENTIRELY in replay.mjs, which
+exits 3 whenever `bootContext` is empty. Never make an empty-context path
+exit 0. Pass 2's
+promotion note is appended only while the file is still unconsumed
+(`open('r+')` → ENOENT once boot-inject renamed it away), never re-created:
+a resurrected context re-injects the same summary into a later session.
+This shortens the wait; it does not close it — a ~200k-char Sonnet prompt
+never returns inside the 4s/9s poll windows, so boot-catchup still covers
+the residual gap. Transcript text comes
 from `_lib.mjs extractConversation` (skips isMeta + tool_result user
 entries, accepts string AND array-text prompts) bounded by
 `truncateConversation` (head+tail ≈200k chars — a long session must not
@@ -402,7 +419,11 @@ mutation-pinned against a too-broad classifier; plus the loop-breaker —
 `settingSources: []` COUNTED at exactly 2 (one per pass) and the
 `MP_REPLAY_CHILD` export present, both against comment-STRIPPED source,
 since the prose describing each guard would otherwise satisfy a
-presence-only grep),
+presence-only grep; plus the early-delivery contract behaviorally — a
+stubbed SDK via `CLAUDE_AGENT_SDK` whose pass 2 sleeps, asserting
+`$MP_BOOT_CTX` lands well before exit, that a context consumed mid-pass-2
+is never resurrected by the trailing promotion note (mutation-verified),
+and that the no-`MP_BOOT_CTX` stdout fallback still works for manual runs),
 `test_session_end_launcher` (quote-safe env-passing launcher: apostrophe
 project path still replays; failure path writes per-project
 `.replay-error-<hash>.log` + synthetic banner + exit marker; no fixed
@@ -411,7 +432,9 @@ launch and carry-forward of the prior boot context; exit-2 benign no-op
 carries forward too; an unconsumed fresh context is snapshotted not
 destroyed; plus the loop-breaker behaviorally — `MP_REPLAY_CHILD=1` in the
 env means exit 0, NO launch, no boot context, and a comment-stripped scan
-that all four reachable hooks carry the guard as code),
+that all four reachable hooks carry the guard as code; plus exit 0 with
+EMPTY stdout as a SUCCESS shape — the replay-written context survives with
+no failure marker and no tmp litter, the early-delivery contract),
 `test_memory_search_inject` (the FTS5 pipeline end-to-end: real indexer
 over a sandboxed store — build / nested-shape type resolution / archived
 status / incremental edit+delete sync — then the real inject hook via

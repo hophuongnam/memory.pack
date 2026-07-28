@@ -224,6 +224,32 @@ if (!bootContext) {
 }
 
 // ───────────────────────────────────────────────────────────────────────
+// Deliver: write the boot context the moment pass 1 has it.
+// session-end.sh's launcher only renames its stdout tmp at process EXIT, so
+// emitting at the bottom of this file (below pass 2) charged the next session
+// the full cost of a second agent call for a summary already in hand —
+// measured 2026-07-28: launch 15:25:25, context on disk 15:30:23 (4m58s) on a
+// 520KB transcript. Write + rename so boot-inject can never read a partial
+// context. Stdout stays the fallback for a manual `node replay.mjs <sid>
+// <cwd>` run — which is why the launcher must accept exit 0 with no stdout.
+// ───────────────────────────────────────────────────────────────────────
+const bootCtxPath = process.env.MP_BOOT_CTX || '';
+let delivered = false;
+if (bootContext && bootCtxPath) {
+  // .tmp.<pid> keeps concurrent same-project replays off one path, and matches
+  // the "$BOOT_CTX".tmp* sweep session-end.sh already runs at launch.
+  const tmp = `${bootCtxPath}.tmp.deliver.${process.pid}`;
+  try {
+    await fs.writeFile(tmp, bootContext.endsWith('\n') ? bootContext : `${bootContext}\n`);
+    await fs.rename(tmp, bootCtxPath);
+    delivered = true;
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    process.stderr.write(`[replay] direct delivery failed (${err?.message || err}) — falling back to stdout\n`);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
 // Pass 2: Memory promotion proposals (best-effort; never blocks pass 1)
 // ───────────────────────────────────────────────────────────────────────
 let promotionSummary = '';
@@ -402,10 +428,30 @@ Not a memory file — \`memory-lint\` ignores this path.
 // Output: boot context (consumed by boot-inject.sh) + optional pending note
 // ───────────────────────────────────────────────────────────────────────
 if (bootContext) {
-  console.log(bootContext);
-  if (promotionSummary) {
-    console.log('');
-    console.log(promotionSummary);
+  if (delivered) {
+    // Already on disk since pass 1. Append the promotion note only while the
+    // file is still unconsumed: boot-inject renames it away once injected, and
+    // re-creating it would feed a later session the same summary twice. Losing
+    // the note costs nothing on the success path — boot-inject counts
+    // PROPOSAL lines in PENDING_MEMORIES.md itself — and a promotion FAILURE
+    // that races a consume still has its stderr line.
+    if (promotionSummary) {
+      try {
+        const fh = await fs.open(bootCtxPath, 'r+'); // ENOENT once consumed
+        try {
+          const { size } = await fh.stat();
+          await fh.write(`\n${promotionSummary}\n`, size);
+        } finally {
+          await fh.close();
+        }
+      } catch { /* consumed already — see above */ }
+    }
+  } else {
+    console.log(bootContext);
+    if (promotionSummary) {
+      console.log('');
+      console.log(promotionSummary);
+    }
   }
 } else {
   // Reached end with nothing to emit. stderr already has pass 1's reason;

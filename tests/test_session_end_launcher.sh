@@ -280,6 +280,50 @@ grep -q '^sid-child$' "$SBX/ok-invocations" 2>/dev/null \
   && ok "replay child: no boot context written" \
   || bad "replay child: no boot context written" "bc=$(head -1 "$BC7" 2>/dev/null)"
 
+# --- case 8: replay delivers the boot context itself; stdout may be empty ----
+# replay.mjs writes $MP_BOOT_CTX atomically the moment pass 1 finishes, so the
+# next session doesn't wait out pass 2's second agent call (measured
+# 2026-07-28: 4m58s end-to-end on a 520KB transcript, boot context computed
+# minutes earlier). The launcher only renamed its stdout tmp at process EXIT,
+# so it must now treat exit 0 + empty stdout as success — the old
+# `-s "$MP_TMP"` test dropped it into the failure branch and stamped a
+# "Replay failed" banner over the freshly delivered summary.
+STUB_DELIVER="$SBX/bin-deliver"
+mkdir -p "$STUB_DELIVER"
+cat > "$STUB_DELIVER/node" <<'EOF'
+#!/bin/sh
+printf 'TITLE: delivered by replay\nSUMMARY: written straight to MP_BOOT_CTX\n' > "$MP_BOOT_CTX"
+exit 0
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$STUB_DELIVER/osascript"
+chmod +x "$STUB_DELIVER/node" "$STUB_DELIVER/osascript"
+
+PROJ8="$SBX/Deliver.Proj"
+mkdir -p "$PROJ8"
+HASH8=$(printf '%s' "$PROJ8" | _mp_hash)
+BC8="$ENGINE/.boot-context-${HASH8}"
+
+printf '{"session_id":"sid-deliver","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ8" "$PROJ8" \
+  | PATH="$STUB_DELIVER:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+sleep 1
+if grep -q '^TITLE: delivered by replay' "$BC8" 2>/dev/null; then
+  ok "early delivery: exit 0 + empty stdout keeps the replay-written context"
+else
+  bad "early delivery: exit 0 + empty stdout keeps the replay-written context" \
+      "bc=$(head -2 "$BC8" 2>/dev/null | tr '\n' '|')"
+fi
+[ ! -f "$ENGINE/.replay-error-${HASH8}" ] \
+  && ok "early delivery: no failure marker on the empty-stdout success path" \
+  || bad "early delivery: no failure marker on the empty-stdout success path" \
+         "marker=$(cat "$ENGINE/.replay-error-${HASH8}" 2>/dev/null)"
+# shellcheck disable=SC2086
+if [ -z "$(ls "$BC8".tmp* 2>/dev/null)" ]; then
+  ok "early delivery: stdout tmp cleaned up"
+else
+  bad "early delivery: stdout tmp cleaned up" "leftover=$(ls "$BC8".tmp* 2>/dev/null)"
+fi
+
 # --- structural: every hook a replay child can reach carries the guard ------
 # Comment-stripped: the prose above each guard names MP_REPLAY_CHILD too, so
 # a presence-only grep would survive deleting the guard itself.

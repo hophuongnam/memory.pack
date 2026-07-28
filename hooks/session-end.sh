@@ -169,7 +169,10 @@ rm -f "$BOOT_CTX".tmp* "$PID_FILE" "$ERR_MARKER" "$ERR_LOG"
 find "$SCRIPT_DIR" -maxdepth 1 -name '.boot-marker-*' -mtime +3 -delete 2>/dev/null
 
 # Detach replay. Three outcomes:
-#   success (exit 0, non-empty stdout) → move tmp into place, notify "finished"
+#   success (exit 0)                   → replay already delivered the context
+#                                        itself; move tmp into place only if
+#                                        it fell back to stdout, notify
+#                                        "finished"
 #   benign no-op (exit 2)              → silent cleanup, no notification
 #   failure (exit 3 / crash / empty)   → write a synthetic error boot-context
 #                                        so the NEXT session's boot-inject
@@ -209,9 +212,15 @@ nohup env \
     MP_TMP="$MP_BOOT_CTX.tmp.$$"
     node "$MP_REPLAY" "$MP_SESSION_ID" "$MP_PROJECT_KEY" > "$MP_TMP" 2> "$MP_ERR_LOG"
     STATUS=$?
-    if [ "$STATUS" -eq 0 ] && [ -s "$MP_TMP" ]; then
-      mv "$MP_TMP" "$MP_BOOT_CTX"
-      rm -f "$MP_ERR_MARKER" "$MP_ERR_LOG"
+    if [ "$STATUS" -eq 0 ]; then
+      # replay.mjs writes $MP_BOOT_CTX itself as soon as pass 1 finishes, so
+      # the next session no longer waits out pass 2 (this rename only ran at
+      # process exit). Empty stdout is the normal success shape now; the mv
+      # is the fallback for a run that could not deliver directly. Gating
+      # success on [ -s "$MP_TMP" ] stamped the failure banner over a good
+      # context.
+      [ -s "$MP_TMP" ] && mv "$MP_TMP" "$MP_BOOT_CTX"
+      rm -f "$MP_TMP" "$MP_ERR_MARKER" "$MP_ERR_LOG"
       osascript -e "display notification \"Replay finished\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true
     elif [ "$STATUS" -eq 2 ]; then
       rm -f "$MP_TMP" "$MP_ERR_MARKER" "$MP_ERR_LOG"

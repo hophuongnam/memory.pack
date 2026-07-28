@@ -22,9 +22,11 @@
 // so they are testable without the agent SDK; a structural layer asserts
 // replay.mjs actually consumes them.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIB = join(HERE, '..', 'hooks', '_lib.mjs');
@@ -223,6 +225,105 @@ check('no read of the nonexistent result.error field',
 check('non-result limit branch is gated on rate_limit_event',
   /message\.type === 'rate_limit_event' && isUsageLimitSignal\(message\)/.test(replaySrc),
   'ungated else-if — every future SDK message type is a false-positive candidate');
+
+// ─── behavioral: boot-context delivery must not wait for pass 2 ─────────
+// The launcher only renames its stdout tmp at process EXIT, so emitting the
+// boot context at the bottom of the script charged the next session the FULL
+// cost of pass 2's second agent call — even though pass 1 had the summary
+// minutes earlier (measured 2026-07-28: launch 15:25:25 → context on disk
+// 15:30:23, 4m58s, on a 520KB transcript). replay.mjs must write
+// $MP_BOOT_CTX itself, atomically, the moment pass 1 finishes. Real
+// subprocess against a stubbed SDK (CLAUDE_AGENT_SDK) — the only way to
+// observe the mid-flight ordering the fix is about.
+const PASS2_MS = 2000;
+const sbx = mkdtempSync(join(tmpdir(), 'mp-replay-'));
+try {
+  writeFileSync(join(sbx, 'sdk-stub.mjs'), `
+export async function getSessionMessages() {
+  return [
+    { type: 'user', message: { role: 'user', content: 'real prompt' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'did the work' }] } },
+  ];
+}
+let calls = 0;
+export async function* query() {
+  calls++;
+  if (calls === 1) {
+    yield { type: 'result', subtype: 'success',
+            result: 'TITLE: stub\\nSUMMARY: pass one done\\nTODO: none\\nDECISIONS: none' };
+    return;
+  }
+  await new Promise(r => setTimeout(r, ${PASS2_MS}));
+  yield { type: 'result', subtype: 'success', result: 'PROPOSAL\\ntype: reference\\nname: stub_fact' };
+}
+`);
+
+  const projCwd = join(sbx, 'Proj');
+  const memoryDir = join(sbx, '.claude', 'projects', projCwd.replace(/[\\/.]/g, '-'), 'memory');
+  mkdirSync(memoryDir, { recursive: true });
+  const bootCtx = join(sbx, '.boot-context-stub');
+  const env = {
+    ...process.env,
+    HOME: sbx,
+    CLAUDE_AGENT_SDK: join(sbx, 'sdk-stub.mjs'),
+    MP_BOOT_CTX: bootCtx,
+  };
+  const REPLAY = join(HERE, '..', 'hooks', 'replay.mjs');
+
+  const run = (extraEnv, onDeliver) => new Promise((resolve) => {
+    const started = Date.now();
+    let deliveredAt = null;
+    const poll = setInterval(() => {
+      if (deliveredAt === null && existsSync(bootCtx)) {
+        deliveredAt = Date.now();
+        if (onDeliver) onDeliver();
+      }
+    }, 25);
+    const child = spawn(process.execPath, [REPLAY, 'sid-stub', projCwd],
+      { env: { ...env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.on('close', (code) => {
+      clearInterval(poll);
+      resolve({ code, stdout, deliveredAt, exitedAt: Date.now(), started });
+    });
+  });
+
+  const r = await run({});
+  check('early delivery: replay exits 0 against the stub SDK', r.code === 0,
+    `exit ${r.code}; stdout=${r.stdout.slice(0, 200)}`);
+  check('early delivery: boot context lands at $MP_BOOT_CTX', r.deliveredAt !== null,
+    'file never appeared — replay still emits only on stdout at exit');
+  if (r.deliveredAt !== null) {
+    const lead = r.exitedAt - r.deliveredAt;
+    check('early delivery: context lands BEFORE pass 2 finishes',
+      lead >= PASS2_MS / 2,
+      `context landed ${lead}ms before exit, want >=${PASS2_MS / 2}ms — pass 2 still gates delivery`);
+    check('early delivery: delivered content is pass 1 output',
+      /SUMMARY: pass one done/.test(readFileSync(bootCtx, 'utf8')),
+      `got ${readFileSync(bootCtx, 'utf8').slice(0, 120)}`);
+    check('early delivery: pass 2 still ran and appended proposals',
+      existsSync(join(memoryDir, 'PENDING_MEMORIES.md')),
+      'promotion pass did not write PENDING_MEMORIES.md');
+  }
+
+  // A consumed context must never be re-created: boot-inject renames the file
+  // away once injected, and anything pass 2 writes afterwards would resurrect
+  // a live context and re-inject the same summary into a later session.
+  rmSync(bootCtx, { force: true });
+  const r2 = await run({}, () => rmSync(bootCtx, { force: true }));
+  check('early delivery: nothing resurrects a context consumed mid-pass-2',
+    r2.code === 0 && !existsSync(bootCtx),
+    `exit ${r2.code}; file back = ${existsSync(bootCtx)} — a later session re-injects this summary`);
+
+  // No MP_BOOT_CTX (manual `node replay.mjs <sid> <cwd>`) → stdout, unchanged.
+  const r3 = await run({ MP_BOOT_CTX: '' });
+  check('early delivery: stdout fallback survives for a manual run',
+    /SUMMARY: pass one done/.test(r3.stdout),
+    `stdout=${r3.stdout.slice(0, 200)}`);
+} finally {
+  rmSync(sbx, { recursive: true, force: true });
+}
 
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
