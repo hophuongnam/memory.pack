@@ -188,6 +188,13 @@ PROJ="$SBX/Fake.Proj"
 mkdir -p "$PROJ"
 PROJ_HASH=$(printf '%s' "$PROJ" | _mp_hash)
 
+# session-end.sh stamps $HOME/.claude/hook_state/<sid>_end_handled on EVERY
+# invocation (orphan-backstop ledger) — sandbox HOME before the first
+# session-end call or every fixture sid litters the REAL claim ledger
+# (observed 2026-07-28: sid-knob-*/sid-monster-* stamps in live hook_state).
+export HOME="$SBX/fake-home"
+mkdir -p "$HOME/.claude"
+
 # Trivial-by-intent session: 2 real prompts buried in 20 tool_results.
 TRIV="$SBX/trivial.jsonl"
 : > "$TRIV"

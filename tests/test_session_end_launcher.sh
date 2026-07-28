@@ -48,6 +48,12 @@ ENGINE="$SBX/engine/hooks"
 mkdir -p "$ENGINE"
 cp "$HOOKS/session-end.sh" "$HOOKS/_lib.sh" "$ENGINE/"
 chmod +x "$ENGINE/session-end.sh"
+# session-end.sh stamps $HOME/.claude/hook_state/<sid>_end_handled on EVERY
+# invocation (orphan-backstop ledger) — sandbox HOME or every fixture sid
+# below litters the REAL claim ledger (observed 2026-07-28: sid-* stamps in
+# the live hook_state).
+export HOME="$SBX/home"
+mkdir -p "$HOME"
 # shellcheck disable=SC1090
 . "$HOOKS/_lib.sh"
 

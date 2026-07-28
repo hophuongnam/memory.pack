@@ -35,6 +35,18 @@
 #     (duplicate replay; the real SessionEnd re-handles and overwrites).
 #   unstamped    — no hook_state/<sid>_end_handled ledger entry (session-end.sh
 #     stamps every handled end; the stamp doubles as the sweep's atomic claim).
+#   interactive  — .boot-marker-<sid> exists in the hooks dir: the session
+#     provably BOOTED through boot-inject. Hook-less SDK children — replay.mjs
+#     runs both passes with settingSources: [], so no hook ever fires for
+#     them — write transcripts into the SAME project dir but get no marker and
+#     no stamp: quiet + unstamped + cwd-verified, they satisfied every other
+#     filter, and the sweep re-replayed the replay's own children 30 minutes
+#     later, each garbage replay spawning two more marker-less children
+#     (async replay-of-replay storm, observed 2026-07-28 — the asynchronous
+#     twin of the 2026-07-25 settingSources loop). Markers survive crashes
+#     (session-end.sh removes them only on a HANDLED end) and boot-inject/
+#     session-end GC them at 3 days, matching the horizon, so a real crash
+#     orphan keeps its marker for exactly as long as it stays sweepable.
 #   not current  — never the session that is starting right now.
 #   not superseded — no NEWER stamped sibling in the same project dir: its boot
 #     context already supersedes the orphan's; replaying the orphan would
@@ -117,6 +129,11 @@ do_pass() {
       # cwd extraction, which on a 100MB transcript is the sweep's only
       # expensive step. Pinned structurally by test D4.
       [ -f "$STATE_DIR/${sid}_end_handled" ] && continue
+      # Interactive-evidence gate (see header): no boot marker → the session
+      # never booted through our hooks → it is an SDK child (replay pass 1/2,
+      # promotion agents), not a crashed session. Replaying it is the async
+      # replay-of-replay loop. Fails toward "not an orphan".
+      [ -f "$SCRIPT_DIR/.boot-marker-$sid" ] || continue
       # Opportunistic veto only — see header: lsof CANNOT prove death, but an
       # open fd (a fd-holding future CC, a tail -f) does prove "don't touch".
       if command -v lsof >/dev/null 2>&1 && lsof -- "$t" >/dev/null 2>&1; then

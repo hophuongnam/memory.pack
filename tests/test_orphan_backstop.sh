@@ -36,6 +36,17 @@
 # _mp_resolve_project_key and accepted ONLY if the resolved key slugifies
 # back to the transcript's parent-dir slug. No verified cwd → skip, never
 # mis-file another project's boot context.
+#
+# INTERACTIVE EVIDENCE IS REQUIRED (BUG-async-replay-of-replay, 2026-07-28):
+# a transcript is only an orphan candidate if its session BOOTED through
+# boot-inject — i.e. .boot-marker-<sid> exists in the hooks dir. replay.mjs's
+# own SDK children (settingSources: []) write transcripts into the SAME
+# project dir but never run hooks: no marker, no stamp — so they satisfied
+# every other filter and the sweep re-replayed the replay's own children 30
+# minutes later, each garbage replay spawning two more child transcripts
+# (self-sustaining storm, observed 2026-07-28 burning the usage window).
+# Markers survive crashes (session-end.sh removes them only on handled
+# ends) and are GC'd at 3 days — matching the sweep horizon.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HOOKS="$HERE/../hooks"
@@ -150,6 +161,10 @@ mk_orphan() { # mk_orphan <projdir> <sid> <age-seconds> [turns] → transcript p
   ORPHAN="$FH/.claude/projects/$(slugify "$_proj")/${_sid}.jsonl"
   mk_transcript "$ORPHAN" "$_proj" "$_turns"
   age "$ORPHAN" "$_age"
+  # A real crashed session always booted through boot-inject first, so its
+  # marker exists (session-end.sh only removes it on a HANDLED end). Content
+  # is irrelevant to the sweep — existence is the interactive evidence.
+  printf 'none' > "$SB_B/.boot-marker-${_sid}"
 }
 
 # B1: first run self-inits the baseline and touches nothing else
@@ -230,6 +245,8 @@ _p6="$TMP/proj-b6"; mkdir -p "$_p6"
 TR6="$FH6/.claude/projects/$(slugify "$_p6")/sid-b6.jsonl"
 mk_transcript "$TR6" "$_p6" 3
 age "$TR6" 4000   # older than the baseline
+# Marker present so the ONLY excluder under test is the baseline.
+printf 'none' > "$SB_B/.boot-marker-sid-b6"
 reset_rec
 env HOME="$FH6" MP_TEST_REC="$REC" MP_CURRENT_SID="sid-current" \
     MP_ORPHAN_PASS2=0 MP_ORPHAN_QUIET_MIN=30 \
@@ -286,6 +303,8 @@ _p10="$TMP/proj-b10"; mkdir -p "$_p10"
 TR10="$FH/.claude/projects/$(slugify "$_p10")/sid-b10.jsonl"
 mk_transcript "$TR10" "/somewhere/entirely-else" 3
 age "$TR10" 2400
+# Marker present so the ONLY excluder under test is cwd verification.
+printf 'none' > "$SB_B/.boot-marker-sid-b10"
 sweep
 [ "$(calls)" = "0" ] \
   && ok "B10: unverifiable cwd → skipped (never mis-file)" \
@@ -328,6 +347,26 @@ sweep
   && ok "B12: sentinel left for the real session end (not consumed)" \
   || bad "B12: sentinel left for the real session end" "sentinel gone"
 rm -f "$SB_B/.skip-replay-$HASH12" "$FH/.claude/projects/$(slugify "$_p12")/sid-b12.jsonl"
+
+# B13: a marker-less transcript is NEVER an orphan candidate. This is the
+# hook-less SDK-child shape: replay.mjs's own pass-1/pass-2 sessions
+# (settingSources: []) land in the project dir quiet + unstamped + cwd-
+# verified — every other filter passes — but no .boot-marker-<sid> was ever
+# written because no hook ever ran for them. Sweeping one replays a replay:
+# the async loop observed 2026-07-28 (each garbage replay spawns two more
+# marker-less children → self-sustaining storm). Mutation pair: B2 proves
+# the marker-HOLDING orphan still launches, so this cannot pass via an
+# over-broad "skip everything" regression.
+reset_rec
+mk_orphan "$TMP/proj-b13" "sid-b13" 2400
+rm -f "$SB_B/.boot-marker-sid-b13"
+sweep
+[ "$(calls)" = "0" ] \
+  && ok "B13: marker-less (hook-less SDK child) transcript skipped" \
+  || bad "B13: marker-less (hook-less SDK child) transcript skipped" "calls=$(calls) — sweep replayed a replay child"
+[ ! -f "$FH/.claude/hook_state/sid-b13_end_handled" ] \
+  && ok "B13: marker-less transcript not claimed" \
+  || bad "B13: marker-less transcript not claimed" "stamp appeared"
 
 # B14: pass 2 re-scan is idempotent (claim makes it a no-op)
 reset_rec

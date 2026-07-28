@@ -130,8 +130,17 @@ in-horizon (`MP_ORPHAN_HORIZON_MIN`, 3d), QUIET (`MP_ORPHAN_QUIET_MIN`,
 30min — the PRIMARY liveness signal: CC does NOT hold the transcript fd
 open between writes, verified 2026-07-27 lsof-on-live-transcript exits 1,
 so lsof runs only as an opportunistic extra veto; quiet fails SAFE),
-unstamped, not the current session, and not superseded by a newer STAMPED
-sibling (replaying an older orphan would REGRESS boot context). Its
+unstamped, INTERACTIVE (`.boot-marker-<sid>` present in hooks/ — positive
+evidence the session booted through boot-inject; markers survive crashes,
+are deleted only on a HANDLED end, GC'd at 3d = the horizon. Without this
+gate the sweep ate replay.mjs's own hook-less SDK children —
+`settingSources: []` means no hooks, so no marker AND no stamp — whose
+transcripts land in the SAME project dir, quiet + cwd-verified: the ASYNC
+replay-of-replay storm observed 2026-07-28, each garbage replay spawning
+two more orphan-shaped children; the 2026-07-25 sync-loop fix is exactly
+what manufactures the orphan shape), not the current session, and not
+superseded by a newer STAMPED sibling (replaying an older orphan would
+REGRESS boot context). Its
 project key is recovered from cwd values INSIDE the transcript and
 accepted only if it slugifies back to the transcript's parent-dir slug
 (invariant #4 — never mis-file); a live `.skip-replay-<hash>` is honored
@@ -481,7 +490,10 @@ stamping `<sid>_end_handled` on every handled path — launch, trivial-skip,
 skip-sentinel — mutation-verified; Layer B drives the real sweep with a
 RECORDING session-end stub: happy-path synthesized stdin field-exact,
 baseline self-init + pre-baseline exemption, quiet-window, horizon,
-current-session exclusion, stamped skip, newer-stamped-sibling supersede,
+current-session exclusion, stamped skip, marker gate (a marker-less
+hook-less-SDK-child transcript is never a candidate — the async
+replay-of-replay pin, mutation-paired with the marker-holding happy path),
+newer-stamped-sibling supersede,
 newest-per-project, `MP_ORPHAN_MAX` cap with newest-first ordering,
 unverifiable-cwd skip-without-claim, lsof-veto mutation pair,
 skip-replay-sentinel honored-not-consumed, and two-pass claim idempotence
