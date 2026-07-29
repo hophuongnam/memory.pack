@@ -131,15 +131,23 @@ check('replay.mjs no longer string-only on user content',
   !/typeof m\.message\?\.content === 'string'/.test(replaySrc),
   'old string-only check still present');
 
-// ─── structural: both passes ride the 'sonnet' alias, never a pinned ID ──
-// The SDK resolves the bare alias to the current latest Sonnet (verified
-// behaviorally against the real SDK: 'sonnet' → claude-sonnet-4-6 on
-// @anthropic-ai/claude-agent-sdk 0.2.77). A pinned ID silently freezes the
-// replay agent on a stale model at every future Sonnet release.
-const aliasHits = (replaySrc.match(/model:\s*'sonnet'/g) || []).length;
-check('both replay passes use the sonnet alias', aliasHits === 2, `found ${aliasHits}, want 2`);
-check('no pinned claude-sonnet-* model ID in code', !/claude-sonnet-/.test(replaySrc),
-  'pinned Sonnet ID present — use the bare alias');
+// ─── structural: replay model is PINNED (env-overridable), not the alias ──
+// Reversal of the 2026-06 "bare alias" contract, 2026-07-29: the alias
+// floated to claude-sonnet-5 when the installed SDK updated, and Sonnet 5
+// runs adaptive thinking BY DEFAULT when the request omits thinking config.
+// Measured replay children: 60k-115k output tokens per pass (327-624s
+// wall-clock) for ~500-token answers — thinking spend, not summary text.
+// claude-sonnet-4-6 keeps thinking OFF when omitted and tokenizes ~30%
+// smaller. MP_REPLAY_MODEL is the escape hatch (deprecation, haiku
+// experiments) so the next model move is an env edit, not a code edit.
+const modelHits = (replaySrc.match(/model:\s*MODEL\b/g) || []).length;
+check('both replay passes use the shared MODEL const', modelHits === 2,
+  `found ${modelHits}, want 2`);
+check('MODEL defaults to pinned claude-sonnet-4-6',
+  /MP_REPLAY_MODEL\s*\|\|\s*'claude-sonnet-4-6'/.test(replaySrc),
+  'default drifted off the pin — see 2026-07-29 thinking-by-default incident');
+check('bare sonnet alias gone from replay passes', !/model:\s*'sonnet'/.test(replaySrc),
+  'alias present — floats to Sonnet 5, adaptive thinking on, 5-10x slower');
 
 // ─── isUsageLimitSignal: benign outage vs real failure ──────────────────
 // replay.mjs exits 2 (benign → session-end carries the prior boot context
@@ -239,6 +247,7 @@ const PASS2_MS = 2000;
 const sbx = mkdtempSync(join(tmpdir(), 'mp-replay-'));
 try {
   writeFileSync(join(sbx, 'sdk-stub.mjs'), `
+import fs from 'node:fs';
 export async function getSessionMessages() {
   return [
     { type: 'user', message: { role: 'user', content: 'real prompt' } },
@@ -246,8 +255,10 @@ export async function getSessionMessages() {
   ];
 }
 let calls = 0;
-export async function* query() {
+export async function* query(args) {
   calls++;
+  fs.appendFileSync(process.env.MP_TEST_MODEL_LOG,
+    ((args && args.options && args.options.model) || 'MISSING') + '\\n');
   if (calls === 1) {
     yield { type: 'result', subtype: 'success',
             result: 'TITLE: stub\\nSUMMARY: pass one done\\nTODO: none\\nDECISIONS: none' };
@@ -262,11 +273,16 @@ export async function* query() {
   const memoryDir = join(sbx, '.claude', 'projects', projCwd.replace(/[\\/.]/g, '-'), 'memory');
   mkdirSync(memoryDir, { recursive: true });
   const bootCtx = join(sbx, '.boot-context-stub');
+  const modelLog = join(sbx, 'models.log');
   const env = {
     ...process.env,
     HOME: sbx,
     CLAUDE_AGENT_SDK: join(sbx, 'sdk-stub.mjs'),
     MP_BOOT_CTX: bootCtx,
+    MP_TEST_MODEL_LOG: modelLog,
+    // Neutralize any real override in the invoking shell: '' is falsy, so
+    // replay falls back to its pinned default — which is what run 1 asserts.
+    MP_REPLAY_MODEL: '',
   };
   const REPLAY = join(HERE, '..', 'hooks', 'replay.mjs');
 
@@ -292,6 +308,11 @@ export async function* query() {
   const r = await run({});
   check('early delivery: replay exits 0 against the stub SDK', r.code === 0,
     `exit ${r.code}; stdout=${r.stdout.slice(0, 200)}`);
+  const modelsR = existsSync(modelLog)
+    ? readFileSync(modelLog, 'utf8').trim().split('\n') : [];
+  check('model pin: both stub passes received claude-sonnet-4-6',
+    modelsR.length === 2 && modelsR.every((m) => m === 'claude-sonnet-4-6'),
+    `recorded: [${modelsR.join(', ')}]`);
   check('early delivery: boot context lands at $MP_BOOT_CTX', r.deliveredAt !== null,
     'file never appeared — replay still emits only on stdout at exit');
   if (r.deliveredAt !== null) {
@@ -317,10 +338,16 @@ export async function* query() {
     `exit ${r2.code}; file back = ${existsSync(bootCtx)} — a later session re-injects this summary`);
 
   // No MP_BOOT_CTX (manual `node replay.mjs <sid> <cwd>`) → stdout, unchanged.
-  const r3 = await run({ MP_BOOT_CTX: '' });
+  // Piggybacks the MP_REPLAY_MODEL override: both passes must ride it.
+  const r3 = await run({ MP_BOOT_CTX: '', MP_REPLAY_MODEL: 'test-model-override' });
   check('early delivery: stdout fallback survives for a manual run',
     /SUMMARY: pass one done/.test(r3.stdout),
     `stdout=${r3.stdout.slice(0, 200)}`);
+  const allModels = existsSync(modelLog)
+    ? readFileSync(modelLog, 'utf8').trim().split('\n') : [];
+  check('model pin: MP_REPLAY_MODEL override reaches both passes',
+    allModels.length === 6 && allModels.slice(-2).every((m) => m === 'test-model-override'),
+    `recorded ${allModels.length} calls; last two: [${allModels.slice(-2).join(', ')}]`);
 } finally {
   rmSync(sbx, { recursive: true, force: true });
 }

@@ -57,10 +57,16 @@ verified in bundle 2.1.181, see
 `reference_cc_posttooluse_additionalcontext` in the project store).
 
 **Two-pass replay** (`hooks/replay.mjs`, detached by `session-end.sh` via
-`nohup`/`disown`; model = the bare `sonnet` alias, resolved by whichever
-agent SDK `resolveSdkSpecifier` finds — NOT a pinned ID (pinned by
-`test_replay_extraction`), so it tracks the installed SDK's latest Sonnet and
-can differ per host; `maxTurns:6`, `tools:[]`, `settingSources:[]`):
+`nohup`/`disown`; model = PINNED `claude-sonnet-4-6`, `MP_REPLAY_MODEL` env
+overrides (pinned by `test_replay_extraction`). Deliberate reversal of the
+earlier bare-`sonnet`-alias contract, 2026-07-29: the alias floated to
+Sonnet 5 with an SDK update, and Sonnet 5 runs adaptive thinking BY DEFAULT
+when the request omits thinking config — replay children burned 60k-115k
+OUTPUT tokens/pass, 327-624s wall-clock, for ~500-token summaries. 4.6 keeps
+thinking off when omitted + tokenizes ~30% smaller; if it's ever retired the
+SDK error surfaces as the "Replay failed" banner (visible, never silent
+amnesia) and the fix is an env edit; `maxTurns:6`, `tools:[]`,
+`settingSources:[]`):
 pass 1 → `.boot-context-<hash>` (consumed once by `boot-inject.sh`, archived
 to `sessions.log.md` + `SESSIONS.md`); pass 2 → strict "default NONE"
 promotion agent appends to `PENDING_MEMORIES.md` (proposes, never writes —

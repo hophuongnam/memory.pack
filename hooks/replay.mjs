@@ -64,6 +64,18 @@ if (!sessionId) {
   bail(2, 'no session id passed on argv — nothing to replay');
 }
 
+// PINNED model, env-overridable — deliberate reversal of the earlier bare
+// 'sonnet' alias (2026-07-29). The alias floated to claude-sonnet-5 with an
+// SDK update, and Sonnet 5 runs adaptive thinking BY DEFAULT when the request
+// omits thinking config: measured replay children burned 60k-115k OUTPUT
+// tokens per pass (327-624s wall-clock) for ~500-token summaries — thinking
+// spend, not text. claude-sonnet-4-6 keeps thinking OFF when omitted and
+// tokenizes the same transcript ~30% smaller. If this model is ever
+// deprecated the SDK errors → exit 3 → visible "Replay failed" banner (never
+// silent amnesia); fix via MP_REPLAY_MODEL or bump the pin. Pinned by
+// test_replay_extraction.
+const MODEL = process.env.MP_REPLAY_MODEL || 'claude-sonnet-4-6';
+
 // Read previous session messages
 const msgs = await getSessionMessages(sessionId, { cwd });
 if (!msgs || msgs.length === 0) {
@@ -146,11 +158,7 @@ TRANSCRIPT:
 ${transcript}`,
   options: {
     maxTurns: 6,
-    // Bare alias, not a pinned ID: the SDK resolves 'sonnet' to whatever the
-    // installed agent-SDK considers the current Sonnet (claude-sonnet-4-6 as
-    // of SDK 0.2.77), so a Sonnet release doesn't leave replay on a stale
-    // model. Pinned by test_replay_extraction.
-    model: 'sonnet',
+    model: MODEL,
     systemPrompt: 'You are a session replay agent. Analyze the transcript and output the structured boot context on your first turn. No tool calls — just output text.',
     permissionMode: 'bypassPermissions',
     // Force text-only output. Without this the SDK enables the full Claude Code
@@ -330,8 +338,7 @@ ${transcript}`;
       prompt: promotionPrompt,
       options: {
         maxTurns: 6,
-        // See pass-1 comment: bare alias so this tracks the latest Sonnet.
-        model: 'sonnet',
+        model: MODEL,
         systemPrompt: 'You are a strict memory-promotion agent. Default to NONE. Only emit proposals for durable, non-derivable, non-duplicate facts. No tool calls — text output only.',
         permissionMode: 'bypassPermissions',
         // See pass-1 comment: tools: [] forces the model to emit text instead
