@@ -32,10 +32,11 @@ mp_fields=$(printf '%s' "$input" | jq -r '[
     (.rate_limits.five_hour.used_percentage  // .rateLimits.fiveHour.usedPercentage // "" | tostring),
     (.rate_limits.five_hour.resets_at        // .rateLimits.fiveHour.resetsAt       // "" | tostring),
     (.rate_limits.seven_day.used_percentage  // .rateLimits.sevenDay.usedPercentage // "" | tostring),
-    (.rate_limits.seven_day.resets_at        // .rateLimits.sevenDay.resetsAt       // "" | tostring)
+    (.rate_limits.seven_day.resets_at        // .rateLimits.sevenDay.resetsAt       // "" | tostring),
+    (.effort.level                                                                  // "")
   ] | join("\u001f")')
 IFS=$US read -r project_dir cwd model ctx transcript session_id \
-                five_h five_h_reset seven_d seven_d_reset <<EOF
+                five_h five_h_reset seven_d seven_d_reset effort <<EOF
 $mp_fields
 EOF
 unset IFS
@@ -253,6 +254,10 @@ pill_label=$(printf '%s' "$model" | awk '{
   if (index($0,"haiku"))  {print "haiku"; next}
   print $0
 }')
+# Effort level rides inside the pill (CC sends .effort.level only for models
+# that support effort — absent for the rest). In the pill it costs no extra
+# line-1 budget and survives every width mode, since the pill is never dropped.
+[ -n "$effort" ] && pill_label="${pill_label}·${effort}"
 pill="$(ansi_bg "$anchor")$(ansi_fg "$pill_fg") ${pill_label} ${RESET}"
 
 # Reset format_pct to use theme RGB instead of legacy 16-color ANSI.

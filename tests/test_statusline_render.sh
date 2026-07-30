@@ -597,6 +597,24 @@ if [ -f "$SL" ]; then
   echo "$out2" | head -n 1 | grep -q ' opus ' \
     && ok "narrow mode: pill label compacted to 'opus'" \
     || bad "narrow mode: pill label compacted to 'opus'" "got: $(echo "$out2" | head -1)"
+
+  # Effort level rides INSIDE the model pill as "<model>·<level>". CC emits
+  # .effort.level ONLY for models that support effort (the base fixture has
+  # none — absent must render no stray separator), and the pill is never
+  # dropped by width mode, so the level survives narrow too.
+  FIX_EFFORT="$TMPHOME/stdin-effort.json"
+  jq '.effort.level = "xhigh"' "$FIX/statusline-stdin-full.json" > "$FIX_EFFORT"
+  oute=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_EFFORT" 2>/dev/null)
+  echo "$oute" | head -n 1 | grep -q 'opus-4·xhigh' \
+    && ok "full mode: effort level in model pill" \
+    || bad "full mode: effort level in model pill" "got: $(echo "$oute" | head -1)"
+  outen=$(COLUMNS=48 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_EFFORT" 2>/dev/null)
+  echo "$outen" | head -n 1 | grep -q ' opus·xhigh ' \
+    && ok "narrow mode: effort level preserved in compacted pill" \
+    || bad "narrow mode: effort level preserved in compacted pill" "got: $(echo "$outen" | head -1)"
+  echo "$out" | head -n 1 | grep -q '·' \
+    && bad "effort absent: no stray separator in pill" "got: $(echo "$out" | head -1)" \
+    || ok "effort absent: no stray separator in pill"
 fi
 
 # ─── statusline-command.sh integration: COLUMNS=0/empty/unset ──────────────
