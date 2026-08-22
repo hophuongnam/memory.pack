@@ -47,6 +47,8 @@ type: {{user | feedback | project | reference}}
 
 - `node_type` — the Claude Code harness stamps `node_type: memory` into a **subset** of memory files, intermittently, tied to particular CC write paths/versions (verified 2026-05-18: 7 of 36 files in one store, not every write). Like `originSessionId` it is harness-injected, not written by any `Memory.Pack/` hook. Treat it identically: **do not flag as drift, do not hand-remove** (the harness re-adds it; removal just churns the file), **do not seed it manually**. Unlike `originSessionId` it carries no useful signal — it is a pure harness artifact, recognized solely so the lint store stays quiet. Fighting it (stripping on rewrite) was rejected: it would mean a per-write mutation racing the Edit tool for zero benefit.
 
+- `modified` — ISO-8601 timestamp with milliseconds and a `Z` suffix (`2026-07-29T01:17:38.048Z`), stamped by the Claude Code harness on write. Like `originSessionId` and `node_type` it is **harness-injected, not written by any `Memory.Pack/` hook** (verified 2026-07-29: no `hooks/`, `index/`, or `skills/` source writes it). First observed value across the whole corpus is **2026-07-18**, so it arrived with a CC build in mid-July 2026 — memories untouched since then simply don't have it. Census the same day: **134 files across 9 of the 20 stores**, split **124 nested / 16 flat**, confirming it follows the same shape-agnostic rule as every other key. Treat it identically to the other harness fields: **do not flag as drift, do not hand-remove** (the harness re-adds it on the next write), **do not seed it manually**. It carries no signal the filesystem mtime doesn't already have — it is recognized solely so lint stays quiet.
+
 ### Decay-tracking fields (optional)
 
 These four fields drive Ebbinghaus-style decay scoring in `/memory-lint --decay`. All optional — memories without them are treated as maximally strong on first audit, so adoption is zero-migration.
@@ -58,7 +60,7 @@ These four fields drive Ebbinghaus-style decay scoring in `/memory-lint --decay`
 
 Missing fields are NOT drift. `/memory-lint --decay` treats absent `last_recalled`/`last_reviewed` as equivalent to `created`; absent `created` falls back to the file's mtime.
 
-No other frontmatter fields are recognized. Anything beyond `name`/`description`/`type`/`originSessionId`/`node_type`/`created`/`last_recalled`/`recall_count`/`last_reviewed` is drift and should be flagged.
+No other frontmatter fields are recognized. Anything beyond `name`/`description`/`type`/`originSessionId`/`node_type`/`modified`/`created`/`last_recalled`/`recall_count`/`last_reviewed` is drift and should be flagged.
 
 ## Decay model (used by `/memory-lint --decay`)
 
