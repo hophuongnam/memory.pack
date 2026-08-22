@@ -306,6 +306,27 @@ format_pct() {
   fi
 }
 
+# Account identity: which Claude Code account this session is logged in as
+# (mirrors the claude-whoami shell function). CLAUDE_CONFIG_DIR moves the
+# account file the same way it moves it for `claude` itself (e.g. a
+# `claude-work` alias), so the lookup must follow it rather than always
+# reading $HOME — otherwise the segment lies about which profile launched.
+account_part=""
+acct_file="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+if [ -f "$acct_file" ]; then
+    acct_email=$(grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$acct_file" 2>/dev/null \
+        | head -1 | sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
+    if [ -n "$acct_email" ]; then
+        acct_domain=$(printf '%s' "$acct_email" | cut -d'@' -f2 | tr '[:upper:]' '[:lower:]')
+        case "$acct_domain" in
+            *securevectors*) acct_label="Team" ;;
+            *gmail.com)      acct_label="Personal" ;;
+            *)               acct_label=$(printf '%s' "$acct_email" | cut -d'@' -f1) ;;
+        esac
+        [ -n "$acct_label" ] && account_part=" $(ansi_fg "$THEME_FG_ACCOUNT")${ICON_ACCOUNT} ${acct_label}${RESET}"
+    fi
+fi
+
 # --- Line 1 ---
 vibe_part=""
 [ -n "$vibe" ] && vibe_part=" $(ansi_fg "$THEME_FG_VIBE")${ICON_VIBE} ${vibe}${RESET}"
@@ -424,8 +445,8 @@ overlay=""
 # The pill rides a %b ARGUMENT, never the format string: model.display_name
 # is external input, and a % in it becomes a printf directive when embedded
 # in the format (mangled line + stderr noise on every render).
-printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b %b%b%b\n" \
-  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$vibe_part" "$pill" "$git_part" "$cont_display"
+printf "$(ansi_fg "$THEME_FG_PWD")%s${RESET}%b%b %b%b%b\n" \
+  "${ICON_PWD}${ICON_PWD:+ }${dir}" "$account_part" "$vibe_part" "$pill" "$git_part" "$cont_display"
 
 # --- Line 2 ---
 parts=""

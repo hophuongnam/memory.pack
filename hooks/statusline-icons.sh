@@ -33,6 +33,7 @@
 #   ICON_VIBE          U+F0E7  fa-flash                        U+26A1  high-voltage (⚡)
 #   ICON_TURNS         U+F0450 md-refresh                      U+27F3  cycle arrow (⟳)
 #   ICON_SCOPED        U+F06A9 md-robot                        U+1F916 robot (🤖)
+#   ICON_ACCOUNT       U+F0004 md-account                      U+1F464 bust-in-silhouette (👤)
 
 if _mp_have_nerdfont 2>/dev/null; then
   ICON_BRANCH=""
@@ -49,6 +50,7 @@ if _mp_have_nerdfont 2>/dev/null; then
   ICON_VIBE=""
   ICON_TURNS="󰑐"
   ICON_SCOPED="󰚩"
+  ICON_ACCOUNT="󰀄"
 else
   ICON_BRANCH="⎇"
   ICON_DIRTY="●"
@@ -64,4 +66,5 @@ else
   ICON_VIBE="⚡"
   ICON_TURNS="⟳"
   ICON_SCOPED="🤖"
+  ICON_ACCOUNT="👤"
 fi

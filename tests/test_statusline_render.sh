@@ -617,6 +617,55 @@ if [ -f "$SL" ]; then
     || ok "effort absent: no stray separator in pill"
 fi
 
+# ─── statusline-command.sh integration: account identity ───────────────────
+# Which Claude Code account is logged in (mirrors claude-whoami) surfaces on
+# line 1: "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" oauthAccount.emailAddress.
+# Domain maps to a short label (securevectors.com → Team, gmail.com →
+# Personal); an unmapped domain falls back to the email's local-part. Absent
+# file/field → segment hidden, same policy as mem/boot. Rendered in a
+# dedicated bright color (THEME_FG_ACCOUNT), not the generic \033[2m dim used
+# for de-emphasized decorations — an identity badge must be legible at a
+# glance, not read as disabled/greyed-out.
+if [ -f "$SL" ]; then
+  printf '{"oauthAccount":{"emailAddress":"nam@securevectors.com"}}' > "$TMPHOME/.claude.json"
+  out=$(COLUMNS=200 HOME="$TMPHOME" CLAUDE_CONFIG_DIR= MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out" | head -n 1 | grep -q '👤' \
+    && ok "account present: icon renders" \
+    || bad "account present: icon renders" "got: $(echo "$out" | head -1)"
+  echo "$out" | head -n 1 | grep -q 'Team' \
+    && ok "account: securevectors.com maps to 'Team'" \
+    || bad "account: securevectors.com maps to 'Team'" "got: $(echo "$out" | head -1)"
+  echo "$out" | head -n 1 | grep -qE $'\033\[38;2;[0-9]+;[0-9]+;[0-9]+m[^\033]*👤' \
+    && ok "account: renders in a bright truecolor fg, not dim" \
+    || bad "account: renders in a bright truecolor fg, not dim" "got: $(echo "$out" | head -1)"
+
+  rm -f "$TMPHOME/.claude.json"
+  out=$(COLUMNS=200 HOME="$TMPHOME" CLAUDE_CONFIG_DIR= MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  if echo "$out" | head -n 1 | grep -q '👤'; then
+    bad "account absent: no icon (no .claude.json)"
+  else
+    ok "account absent: no icon (no .claude.json)"
+  fi
+
+  # CLAUDE_CONFIG_DIR moves the lookup, same as it moves it for `claude` itself
+  # (e.g. the `claude-work` alias) — the segment must track whichever profile
+  # actually launched, not always $HOME.
+  ALT_CFG="$TMPHOME/altcfg"; mkdir -p "$ALT_CFG"
+  printf '{"oauthAccount":{"emailAddress":"someone@gmail.com"}}' > "$ALT_CFG/.claude.json"
+  out=$(COLUMNS=200 HOME="$TMPHOME" CLAUDE_CONFIG_DIR="$ALT_CFG" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out" | head -n 1 | grep -q 'Personal' \
+    && ok "account: gmail.com maps to 'Personal' + CLAUDE_CONFIG_DIR override picked up" \
+    || bad "account: gmail.com maps to 'Personal' + CLAUDE_CONFIG_DIR override picked up" "got: $(echo "$out" | head -1)"
+
+  # Unmapped domain falls back to the email's local-part rather than hiding
+  # the segment or showing the bare domain.
+  printf '{"oauthAccount":{"emailAddress":"nam@test.example"}}' > "$ALT_CFG/.claude.json"
+  out=$(COLUMNS=200 HOME="$TMPHOME" CLAUDE_CONFIG_DIR="$ALT_CFG" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null)
+  echo "$out" | head -n 1 | grep -q 'nam' \
+    && ok "account: unmapped domain falls back to local-part" \
+    || bad "account: unmapped domain falls back to local-part" "got: $(echo "$out" | head -1)"
+fi
+
 # ─── statusline-command.sh integration: COLUMNS=0/empty/unset ──────────────
 # CC spawns the statusline subprocess with COLUMNS=0 (observed empirically on
 # v2.1.150). Naive `${COLUMNS:-80}` does NOT substitute for "0" (only for
