@@ -207,8 +207,8 @@ in a newer `limits[]` array whose per-model entries are exactly those with a
 `kind=="weekly_scoped"` and never on the literal `"Fable"`, or a model
 rename silently empties the segment. The launcher TTL-gates (120s) and
 `nohup`-detaches; the worker reads the ACTIVE account's token (macOS
-Keychain `Claude Code-credentials`, else plaintext `.credentials.json`),
-curls, and atomically replaces `hook_state/usage_scoped`:
+Keychain, else plaintext `.credentials.json`), curls, and atomically
+replaces `hook_state/usage_scoped`:
 `<fetch_epoch>\n<pct> <resets_epoch> <display name>` (name LAST so a plain
 `read` slurps spaces; the stamp line is load-bearing — it is what the TTL
 gate compares against, and it lands even for an account with ZERO scoped
@@ -222,6 +222,26 @@ network, changed shape) leaves the last-good cache UNTOUCHED and exits 2;
 statusline renders it stale and drops the segment past 24h rather than lie.
 Undocumented endpoint: when `limits[]` changes shape the segment vanishes
 quietly — the tests pin OUR parser, not their schema.
+**This one file is per-ACCOUNT** (`CLAUDE_CONFIG_DIR`, 2026-08-22): a second
+account runs as `CLAUDE_CONFIG_DIR=~/.claude-work claude`, and its usage
+windows and its token both belong to THAT account, so `fetch-usage.sh`,
+`fetch-usage-worker.sh` and `statusline-command.sh:512` resolve the cache
+under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` (one trailing slash stripped) and
+the worker asks the Keychain for `Claude Code-credentials` on the default dir
+or `Claude Code-credentials-<sha256(dir)[:8]>` on any other — the naming CC
+itself uses, read off the live Keychain. The test is the RESOLVED path, never
+whether the variable is set: `CLAUDE_CONFIG_DIR=$HOME/.claude` is a normal
+export and that account owns the plain item. A miss does NOT fall back to the
+unsuffixed item — it holds a DIFFERENT account's token, so its percentages
+beside this account's badge would be a lie; the segment vanishes instead.
+**Everything else stays SHARED on `$HOME/.claude` even under a second config
+dir** — `hook_state` markers and `projects/` index the shared transcript tree,
+and a blanket swap leaves each account scanning the other's transcripts with
+none of its own `<sid>_end_handled` stamps: `orphan-backstop.sh` keeps its
+correctness gate but loses its cost guard and re-arms `orphan-baseline` per
+account. `test_fetch_usage` Layer 4 pins that boundary structurally, including
+`statusline-command.sh`, which is the one file holding BOTH kinds. Full
+reasoning: `project_multi_account_config_dir` in the project store.
 
 **FTS5 search** (`index/`): `index-memories.py` walks all
 `~/.claude/projects/*/memory/**/*.md` → SQLite `search.db` (gitignored,
@@ -479,7 +499,19 @@ leave the last-good cache byte-identical, zero-scoped-window accounts get a
 stamp-only cache, a display name with spaces survives `read` because name is
 the LAST field, missing `resets_at` → epoch-0 sentinel, no tmp litter, token
 never persisted. Mutation-pinned in four directions: TTL gate, dash
-int-guard, token-into-argv, clobber-on-parse-failure),
+int-guard, token-into-argv, clobber-on-parse-failure. Layer 3 drives the
+CLAUDE_CONFIG_DIR split — cache in the config dir and NOT the shared one, the
+config-dir-scoped Keychain service name, the default dir and an explicit
+`CLAUDE_CONFIG_DIR=$HOME/.claude` both keeping the unsuffixed name, trailing
+slash normalized, the config-dir plaintext fallback, the shared
+`.credentials.json` refused as a cross-account fallback, and the TTL gate
+reading the config-dir cache while a fresh SHARED stamp does not gate it.
+Layer 4 is the structural bucket boundary: no hook outside the usage trio may
+name CLAUDE_CONFIG_DIR (comment-stripped scan, mutation-verified against a
+planted reference in session-end.sh), and inside `statusline-command.sh` —
+allowlisted because it holds both buckets — `HOOK_STATE_DIR` is pinned by
+value at `$HOME/.claude/hook_state` with the per-account readers capped at
+exactly 2),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
 `.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs

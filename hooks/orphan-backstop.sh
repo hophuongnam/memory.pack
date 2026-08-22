@@ -71,6 +71,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh" || { echo "memory-pack: cannot source $SCRIPT_DIR/_lib.sh" >&2; exit 1; }
 SELF="$SCRIPT_DIR/$(basename "$0")"
 
+# $HOME/.claude is DELIBERATE here, not an oversight: do NOT rewrite it to
+# ${CLAUDE_CONFIG_DIR:-…}. This sweep scans the SHARED projects/ transcript tree,
+# so its <sid>_end_handled stamps and its baseline must be shared too. Split them
+# per config dir and each account re-scans the other account's transcripts with
+# none of its own stamps: the correctness gate holds (the .boot-marker-<sid> test
+# below lives in the repo, shared under any config dir) but the cost guard dies
+# and orphan-baseline re-arms per account. Only genuinely per-account runtime —
+# the OAuth usage cache in fetch-usage-worker.sh — follows CLAUDE_CONFIG_DIR.
+# See project_multi_account_config_dir in the project memory store.
 STATE_DIR="$HOME/.claude/hook_state"
 BASELINE="$STATE_DIR/orphan-baseline"
 

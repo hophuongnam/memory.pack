@@ -505,7 +505,12 @@ fi
 # they exist so a torn row is SKIPPED rather than rendered as a confident lie
 # ("2.5" would round to a "2%" no writer of ours produced) and so garbage never
 # reaches printf '%.0f', which noisily fails on stderr every single render.
-USAGE_CACHE="$HOOK_STATE_DIR/usage_scoped"
+# Per-account, unlike HOOK_STATE_DIR: the OAuth usage windows belong to the
+# account CLAUDE_CONFIG_DIR selects, so this one cache follows it while every
+# other hook_state file stays shared. Mirrors hooks/fetch-usage-worker.sh, which
+# writes it. See project_multi_account_config_dir in the project memory store.
+USAGE_CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+USAGE_CACHE="${USAGE_CFG_DIR%/}/hook_state/usage_scoped"
 if [ -f "$USAGE_CACHE" ]; then
   {
     u_stamp=""

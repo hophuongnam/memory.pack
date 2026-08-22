@@ -32,7 +32,19 @@
 # statusline-command.sh drops the segment entirely once it passes 24h.
 set -u
 
-CACHE="$HOME/.claude/hook_state/usage_scoped"
+# Per-account state (bucket 2). CLAUDE_CONFIG_DIR moves a Claude Code account's
+# whole profile, and its token AND its usage windows belong to THAT account, so
+# both follow it. Everything else the engine writes (hook_state markers,
+# projects/) deliberately STAYS on $HOME/.claude even under a second config
+# dir: those index the SHARED transcript tree, and splitting them per account
+# breaks orphan-backstop.sh. See project_multi_account_config_dir in the
+# project memory store. Note the fallback is $HOME/.claude, NOT the $HOME that
+# statusline-command.sh:322 uses for the account badge — .claude.json sits at
+# $HOME/.claude.json for the default account but inside the config dir for any
+# other one, while hook_state never does. Copying the wrong fallback is the trap.
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CONFIG_DIR="${CONFIG_DIR%/}"
+CACHE="$CONFIG_DIR/hook_state/usage_scoped"
 URL="https://api.anthropic.com/api/oauth/usage"
 BETA="oauth-2025-04-20"
 
@@ -42,12 +54,33 @@ BETA="oauth-2025-04-20"
 # one code path serves both. `security` is looked up on PATH, never by absolute
 # path — tests shadow it with a stub, and an absolute path would silently read
 # the developer's REAL live token during a test run.
+#
+# Claude Code names the Keychain item after the config dir: the default account
+# gets "Claude Code-credentials", any CLAUDE_CONFIG_DIR gets that name plus
+# "-<first 8 hex of sha256(dir)>" (read off the live Keychain 2026-08-22).
+# The test is the RESOLVED path, not whether CLAUDE_CONFIG_DIR is set: pointing
+# it AT the default dir is a normal thing to do, and that account owns the plain
+# unsuffixed item. sha256 is over the slash-stripped path — Claude Code's own
+# normalization is unverified, so the strip is an assumption, and the only cost
+# of being wrong is a missing segment.
+#
+# A miss does NOT fall back to the unsuffixed item: that item holds another
+# account's token,
+# and printing its percentages beside this account's badge would be a lie. The
+# segment simply disappears, which is this feature's established failure mode.
 creds=""
 if command -v security >/dev/null 2>&1; then
-    creds=$(security find-generic-password -s "Claude Code-credentials" \
+    svc="Claude Code-credentials"
+    if [ "$CONFIG_DIR" != "$HOME/.claude" ]; then
+        h=$(printf '%s' "$CONFIG_DIR" | python3 -c \
+            'import sys, hashlib; sys.stdout.write(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:8])' \
+            2>/dev/null) || h=""
+        [ -n "$h" ] && svc="$svc-$h"
+    fi
+    creds=$(security find-generic-password -s "$svc" \
                      -a "$(id -un)" -w 2>/dev/null) || creds=""
 fi
-[ -n "$creds" ] || creds=$(cat "$HOME/.claude/.credentials.json" 2>/dev/null) || creds=""
+[ -n "$creds" ] || creds=$(cat "$CONFIG_DIR/.credentials.json" 2>/dev/null) || creds=""
 [ -n "$creds" ] || exit 2
 
 access=$(printf '%s' "$creds" | python3 -c '

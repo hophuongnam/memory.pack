@@ -13,7 +13,14 @@ set -u
 # can hand CC a SIGPIPE on a large payload.
 cat >/dev/null 2>&1
 
-CACHE="$HOME/.claude/hook_state/usage_scoped"
+# Per-account state (bucket 2): the usage windows belong to the account
+# CLAUDE_CONFIG_DIR selects, so this one cache follows it. Every OTHER
+# hook_state file stays on $HOME/.claude even under a second config dir —
+# fetch-usage-worker.sh carries the full reasoning, and the bucket boundary is
+# pinned by tests/test_fetch_usage.sh Layer 4.
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CONFIG_DIR="${CONFIG_DIR%/}"
+CACHE="$CONFIG_DIR/hook_state/usage_scoped"
 TTL=120
 
 if [ -f "$CACHE" ]; then

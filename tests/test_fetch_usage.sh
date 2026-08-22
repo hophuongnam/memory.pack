@@ -105,7 +105,7 @@ STUB_LAUNCHER="$SBX/hooks/fetch-usage.sh"
 # The launcher detaches; give the orphan a bounded moment to touch its marker.
 worker_ran() {
   n=0
-  while [ $n -lt 60 ]; do [ -f "$SBX/worker.ran" ] && return 0; sleep 0.05; n=$((n+1)); done
+  while [ $n -lt 200 ]; do [ -f "$SBX/worker.ran" ] && return 0; sleep 0.05; n=$((n+1)); done
   return 1
 }
 
@@ -264,6 +264,164 @@ extra=$(find "$STATE" -name 'usage_scoped*' ! -name 'usage_scoped' | wc -l | tr 
 reset_sbx
 sh "$WORKER"
 grep -rq "$TOKEN" "$STATE" 2>/dev/null && bad "token must not be persisted to hook_state" || ok "token never persisted to disk"
+
+# ══════════════════════════════════════════════════════════════════════════
+# LAYER 3 — CLAUDE_CONFIG_DIR: the per-account bucket.
+#
+# A second account runs as `CLAUDE_CONFIG_DIR=~/.claude-work claude`. Its OAuth
+# token lives in its OWN Keychain item and its usage cache must live in its OWN
+# config dir, or the statusline prints one account's percentages under the other
+# account's badge. Everything else the engine writes (hook_state markers,
+# projects/) stays SHARED on $HOME/.claude BY DESIGN — a blanket swap breaks
+# orphan-backstop.sh. See project_multi_account_config_dir in the project store.
+#
+# Keychain service naming, read off the live Keychain 2026-08-22:
+#     default config dir  ->  "Claude Code-credentials"
+#     CLAUDE_CONFIG_DIR   ->  "Claude Code-credentials-<sha256(dir)[:8]>"
+# ══════════════════════════════════════════════════════════════════════════
+CFG="$SBX/.claude-work"
+CFG_CACHE="$CFG/hook_state/usage_scoped"
+# Computed, never hardcoded — the digest is of the sandbox path, which moves.
+CFG_SVC="Claude Code-credentials-$(printf %s "$CFG" | python3 -c \
+  'import sys, hashlib; sys.stdout.write(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:8])')"
+
+reset_cfg() { reset_sbx; rm -rf "$CFG"; mkdir -p "$CFG/hook_state"; }
+
+# C1 — the worker writes its cache INSIDE the config dir, and leaves the shared
+# one alone. Two accounts sharing one usage_scoped show whoever fetched last.
+reset_cfg
+CLAUDE_CONFIG_DIR="$CFG" sh "$WORKER"; rc=$?
+[ "$rc" -eq 0 ] && ok "cfg: worker exits 0 under CLAUDE_CONFIG_DIR" || bad "cfg: worker exits 0 under CLAUDE_CONFIG_DIR" "rc=$rc"
+[ -f "$CFG_CACHE" ] && ok "cfg: cache lands in \$CLAUDE_CONFIG_DIR/hook_state" \
+                    || bad "cfg: cache lands in \$CLAUDE_CONFIG_DIR/hook_state" "missing $CFG_CACHE"
+[ -f "$CACHE" ] && bad "cfg: shared cache must NOT be written" "$(cat "$CACHE")" \
+                || ok "cfg: shared cache untouched"
+
+# C2 — the Keychain lookup carries the config-dir-scoped service name. Querying
+# the unsuffixed item here returns the OTHER account's token.
+grep -qF -- "$CFG_SVC" "$SBX/security.argv" 2>/dev/null \
+  && ok "cfg: keychain queried with the scoped service name" \
+  || bad "cfg: keychain queried with the scoped service name" \
+         "want '$CFG_SVC' got '$(cat "$SBX/security.argv" 2>/dev/null)'"
+
+# C3 — default account keeps the UNSUFFIXED name. Mutation pin: an unconditional
+# suffix would query an item that does not exist for every single-account user.
+reset_cfg
+sh "$WORKER" >/dev/null 2>&1
+grep -q 'Claude Code-credentials -a' "$SBX/security.argv" 2>/dev/null \
+  && ok "cfg: no CLAUDE_CONFIG_DIR → unsuffixed service name" \
+  || bad "cfg: no CLAUDE_CONFIG_DIR → unsuffixed service name" "$(cat "$SBX/security.argv" 2>/dev/null)"
+
+# C4 — a trailing slash must not change the digest. `CLAUDE_CONFIG_DIR=~/x/` is
+# a normal thing to type, and sha256("…/x/") != sha256("…/x").
+reset_cfg
+CLAUDE_CONFIG_DIR="$CFG/" sh "$WORKER" >/dev/null 2>&1
+grep -qF -- "$CFG_SVC" "$SBX/security.argv" 2>/dev/null \
+  && ok "cfg: trailing slash normalized before hashing" \
+  || bad "cfg: trailing slash normalized before hashing" \
+         "want '$CFG_SVC' got '$(cat "$SBX/security.argv" 2>/dev/null)'"
+
+# C5 — the plaintext fallback (Linux/WSL) follows the config dir too.
+reset_cfg
+rm -f "$SBX/security.out"                 # keychain miss
+creds > "$CFG/.credentials.json"
+CLAUDE_CONFIG_DIR="$CFG" sh "$WORKER"; rc=$?
+[ "$rc" -eq 0 ] && ok "cfg: falls back to \$CLAUDE_CONFIG_DIR/.credentials.json" \
+               || bad "cfg: falls back to \$CLAUDE_CONFIG_DIR/.credentials.json" "rc=$rc"
+grep -q "Bearer $TOKEN" "$SBX/curl.stdin" 2>/dev/null && ok "cfg: config-dir token reaches curl" \
+                                                      || bad "cfg: config-dir token reaches curl"
+
+# C6 — the PERSONAL plaintext file is not a fallback for a config-dir session.
+# Reading it would report the personal account's usage under the work badge.
+reset_cfg
+rm -f "$SBX/security.out"
+creds > "$HOME/.claude/.credentials.json"
+CLAUDE_CONFIG_DIR="$CFG" sh "$WORKER"; rc=$?
+rm -f "$HOME/.claude/.credentials.json"
+[ "$rc" -eq 2 ] && ok "cfg: shared .credentials.json is NOT a cross-account fallback" \
+               || bad "cfg: shared .credentials.json is NOT a cross-account fallback" "rc=$rc"
+[ -f "$CFG_CACHE" ] && bad "cfg: no token → no config-dir cache" "$(cat "$CFG_CACHE")" \
+                    || ok "cfg: no token → no config-dir cache"
+
+# C6b — CLAUDE_CONFIG_DIR pointing AT the default dir must keep the unsuffixed
+# name. Exporting CLAUDE_CONFIG_DIR=$HOME/.claude in a shell rc is a normal
+# thing to do, and that account's item is the plain one — gating on the
+# variable's PRESENCE rather than on the resolved path silently blanks the
+# segment for a configuration that works today.
+reset_cfg
+CLAUDE_CONFIG_DIR="$HOME/.claude" sh "$WORKER" >/dev/null 2>&1
+grep -q 'Claude Code-credentials -a' "$SBX/security.argv" 2>/dev/null \
+  && ok "cfg: CLAUDE_CONFIG_DIR = the default dir → unsuffixed service name" \
+  || bad "cfg: CLAUDE_CONFIG_DIR = the default dir → unsuffixed service name" \
+         "$(cat "$SBX/security.argv" 2>/dev/null)"
+[ -f "$CACHE" ] && ok "cfg: CLAUDE_CONFIG_DIR = the default dir → shared cache path" \
+                || bad "cfg: CLAUDE_CONFIG_DIR = the default dir → shared cache path"
+
+# C7 — the launcher TTL-gates against the config-dir cache.
+reset_cfg
+printf '%s\n2 %s Fable\n' "$(now)" "$RESETS_EPOCH" > "$CFG_CACHE"
+echo "$stop_stdin" | CLAUDE_CONFIG_DIR="$CFG" sh "$STUB_LAUNCHER"
+sleep 0.3
+[ -f "$SBX/worker.ran" ] && bad "cfg: fresh config-dir cache → worker must NOT spawn" \
+                         || ok "cfg: fresh config-dir cache → worker must NOT spawn"
+
+# C8 — the SHARED cache must not gate a config-dir session: that stamp belongs
+# to the other account, so honouring it starves this account of any refresh.
+reset_cfg
+printf '%s\n2 %s Fable\n' "$(now)" "$RESETS_EPOCH" > "$CACHE"
+echo "$stop_stdin" | CLAUDE_CONFIG_DIR="$CFG" sh "$STUB_LAUNCHER"
+worker_ran && ok "cfg: fresh SHARED cache does not gate a config-dir session" \
+           || bad "cfg: fresh SHARED cache does not gate a config-dir session"
+
+# ══════════════════════════════════════════════════════════════════════════
+# LAYER 4 — structural: the bucket boundary itself.
+#
+# Bucket 2 is deliberately TINY. Every other hook_state/projects path must stay
+# on $HOME/.claude even under a second config dir, because those index the
+# SHARED transcript tree — a blanket swap silently degrades orphan-backstop.sh
+# (each account scans the other's transcripts with none of its own stamps).
+# Scan CODE only, comments stripped: the prose above explains the rule and would
+# otherwise satisfy a presence-only grep.
+# ══════════════════════════════════════════════════════════════════════════
+ENGINE="$HERE/.."
+allowed="fetch-usage.sh fetch-usage-worker.sh statusline-command.sh"
+offenders=""
+for f in "$ENGINE"/hooks/*.sh "$ENGINE"/hooks/*.mjs "$ENGINE"/statusline-command.sh; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f")
+  case " $allowed " in *" $base "*) continue ;; esac
+  sed -e 's/^[[:space:]]*#.*$//' -e 's|^[[:space:]]*//.*$||' "$f" \
+    | grep -q 'CLAUDE_CONFIG_DIR' && offenders="$offenders $base"
+done
+[ -z "$offenders" ] && ok "bucket boundary: only the usage trio follows CLAUDE_CONFIG_DIR" \
+                    || bad "bucket boundary: only the usage trio follows CLAUDE_CONFIG_DIR" \
+                           "shared-data state must stay on \$HOME/.claude —$offenders"
+
+# statusline-command.sh is allowlisted wholesale above because it legitimately
+# holds BOTH buckets: HOOK_STATE_DIR (shared markers) and USAGE_CFG_DIR
+# (per-account). A blanket swap of the SHARED one would sail through the scan,
+# so pin it by value and cap the per-account readers at exactly the two known
+# sites — the account badge and the usage cache.
+SL="$ENGINE/statusline-command.sh"
+grep -q 'HOOK_STATE_DIR="$HOME/.claude/hook_state"' "$SL" \
+  && ok "bucket boundary: statusline HOOK_STATE_DIR stays on \$HOME/.claude" \
+  || bad "bucket boundary: statusline HOOK_STATE_DIR stays on \$HOME/.claude" \
+         "$(grep -n 'HOOK_STATE_DIR=' "$SL")"
+n=$(sed -e 's/^[[:space:]]*#.*$//' "$SL" | grep -c 'CLAUDE_CONFIG_DIR')
+[ "$n" = "2" ] && ok "bucket boundary: statusline reads CLAUDE_CONFIG_DIR at exactly 2 sites" \
+               || bad "bucket boundary: statusline reads CLAUDE_CONFIG_DIR at exactly 2 sites" \
+                      "got $n — badge + usage cache are the only per-account readers"
+
+# The three that DO follow it must actually still do so (a deleted line would
+# otherwise pass the scan above by being absent everywhere).
+for base in fetch-usage.sh fetch-usage-worker.sh; do
+  grep -q 'CLAUDE_CONFIG_DIR' "$ENGINE/hooks/$base" \
+    && ok "bucket boundary: $base reads CLAUDE_CONFIG_DIR" \
+    || bad "bucket boundary: $base reads CLAUDE_CONFIG_DIR"
+done
+grep -q 'CLAUDE_CONFIG_DIR' "$ENGINE/statusline-command.sh" \
+  && ok "bucket boundary: statusline-command.sh reads CLAUDE_CONFIG_DIR" \
+  || bad "bucket boundary: statusline-command.sh reads CLAUDE_CONFIG_DIR"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "$fail FAILED"
 exit $((fail > 0))

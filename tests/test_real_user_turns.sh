@@ -243,7 +243,7 @@ printf '{"session_id":"sid-real","transcript_path":"%s","cwd":"%s","workspace":{
 
 launched=0
 i=0
-while [ "$i" -lt 8 ]; do
+while [ "$i" -lt 40 ]; do
   [ -f "$SBX/node-invoked-sid-real" ] && { launched=1; break; }
   sleep 0.5
   i=$((i + 1))
@@ -256,7 +256,7 @@ done
 # wait_for_launch <sid> → 0 if the node stub fired for that session id
 wait_for_launch() {
   _i=0
-  while [ "$_i" -lt 8 ]; do
+  while [ "$_i" -lt 40 ]; do
     [ -f "$SBX/node-invoked-$1" ] && return 0
     sleep 0.5
     _i=$((_i + 1))

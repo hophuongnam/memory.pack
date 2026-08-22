@@ -1133,6 +1133,33 @@ if [ -f "$SL" ]; then
                   || bad "scoped: torn row '$torn' → renders silently" "stderr: $err"
   done
 
+  # --- CLAUDE_CONFIG_DIR: read the ACTIVE account's cache, not the shared one ---
+  # The usage windows belong to one account, so this single hook_state file
+  # follows the config dir while every other one stays shared (bucket 2 of
+  # project_multi_account_config_dir). Reading the shared cache under a second
+  # account prints the personal account's percentages beside the work badge.
+  SWORK="$SHOME/.claude-work"
+  mkdir -p "$SWORK/hook_state"
+  printf '%s\n2 %s Fable\n'       "$NOW" "$FUTURE" > "$SCACHE"
+  printf '%s\n77 %s WorkModel\n'  "$NOW" "$FUTURE" > "$SWORK/hook_state/usage_scoped"
+  slw() { COLUMNS=200 HOME="$SHOME" CLAUDE_CONFIG_DIR="$1" MEMORY_PACK_NERDFONT=0 \
+            bash "$SL" < "$FIX/statusline-stdin-full.json" 2>/dev/null | sed -n '2p'; }
+
+  l2=$(slw "$SWORK")
+  echo "$l2" | grep -q 'WorkModel' && ok "scoped: CLAUDE_CONFIG_DIR cache is the one rendered" \
+                                   || bad "scoped: CLAUDE_CONFIG_DIR cache is the one rendered" "$l2"
+  echo "$l2" | grep -q '77%'       && ok "scoped: CLAUDE_CONFIG_DIR pct rendered" \
+                                   || bad "scoped: CLAUDE_CONFIG_DIR pct rendered" "$l2"
+  echo "$l2" | grep -q 'Fable'     && bad "scoped: shared cache must NOT leak into a config-dir session" "$l2" \
+                                   || ok "scoped: shared cache does not leak into a config-dir session"
+  # A trailing slash is a normal thing to type in the alias.
+  slw "$SWORK/" | grep -q 'WorkModel' && ok "scoped: trailing slash on CLAUDE_CONFIG_DIR still resolves" \
+                                      || bad "scoped: trailing slash on CLAUDE_CONFIG_DIR still resolves" "$(slw "$SWORK/")"
+  # And the default account is unchanged: no config dir → the shared cache.
+  sl2 200 | grep -q 'Fable' && ok "scoped: no CLAUDE_CONFIG_DIR → shared cache still read" \
+                            || bad "scoped: no CLAUDE_CONFIG_DIR → shared cache still read"
+  rm -rf "$SWORK"
+
   # A non-integer resets epoch is TOLERATED (not skipped): the window is real,
   # only its countdown is unknown. Render the pct, hide ↻.
   printf '%s\n2 notanepoch Fable\n' "$NOW" > "$SCACHE"
