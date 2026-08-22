@@ -153,6 +153,13 @@ fi
 # one and no better ancestor matched; the slug-anchored root otherwise).
 [ -n "$proj_key" ] && dir=$(basename "$proj_key")
 
+# Mirror the statusline title onto the iTerm tab. OSC 1 = tab title, the
+# same sequence ~/.zshrc's _set_tab_title uses outside claude. /dev/tty
+# because CC captures stdout; the render loop re-asserts it every event.
+# CC's own topic-titler is off (CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 in
+# settings.json) so nothing fights this. Headless/no-tty → silent no-op.
+{ printf '\033]1;%s\007' "$dir" > /dev/tty; } 2>/dev/null || true
+
 # Find memory dir for the current project. Slug encoding MUST be the
 # engine's `[/.] → -` (boot-inject.sh / replay.mjs / index-memories.py —
 # invariant #4); the legacy [^a-zA-Z0-9] → - flattened `_` and friends
