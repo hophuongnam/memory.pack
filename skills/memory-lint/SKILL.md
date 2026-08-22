@@ -1,6 +1,6 @@
 ---
 name: memory-lint
-description: Audit the auto-memory store for drift — stale project memories, broken file/host references, orphan files, index mismatches, duplicates. Reports a punch list and waits for confirmation before fixing. Use when the user types /memory-lint or asks to "check", "audit", "clean up", or "verify" memory.
+description: Audit the auto-memory store for drift — stale project memories, broken file/host references, orphan files, index mismatches, duplicates. Reports a punch list and waits for confirmation before fixing. `--archive [N]` proposes leaf memories to move into archive/ to shrink an over-cap MEMORY.md. Use when the user types /memory-lint or asks to "check", "audit", "clean up", "verify", "archive", or "trim" memory.
 ---
 
 # Memory Lint
@@ -73,7 +73,7 @@ Today's date is available in the system prompt's `currentDate` block. Use it as 
 
 ### 7. Index hygiene
 - `MEMORY.md` should stay under the 150-line soft cap (harness hard-truncates at 200 lines or 25KB per [official docs](https://code.claude.com/docs/en/memory)). Flag if approaching 150.
-- When the index is near or over 150 lines, propose evictions **FIFO (oldest `created` first) and by topic-overlap** (entries superseded by or duplicative of a newer memory go first), under a dedicated **INDEX CAP** section of the report. Strength is NOT the eviction key here: the recall hook keeps `last_recalled` fresh for everything actually read, so active-store strength collapses toward 1 and ranking by it returns ~0 candidates over the cap. Per-item fix flow is the same as `--decay` mode (reinforce / edit / archive / delete).
+- When the index is near or over 150 lines, report it under a dedicated **INDEX CAP** section and propose the two remedies in order: **first trim over-length index lines** (zero memory loss), **then archive** with the `--archive` selector below. Do NOT rank eviction candidates by strength or by `recall_count` — see `--archive` for why both invert relevance.
 - Each index line should be under ~150 chars. Flag overlong entries.
 
 ## How to run the audit
@@ -86,9 +86,9 @@ Today's date is available in the system prompt's `currentDate` block. Use it as 
    - **BROKEN** — reference confirmed dead (file gone, host unreachable, service removed)
    - **EXPIRED** — date-pinned memory whose date has passed
    - **DRIFT** — index/frontmatter mismatch, overlong lines
-   - **INDEX CAP** — `MEMORY.md` at/near 150 lines; list weakest-strength memories as eviction candidates (only when triggered — not on every run)
+   - **INDEX CAP** — `MEMORY.md` at/near 150 lines (only when triggered — not on every run); point the user at line-trimming, then at `--archive`
    - **SUGGEST** — duplicates, missing xrefs, likely-stale project memories
-   - **DECAYED** and **ARCHIVE CANDIDATES** are produced only in `--decay` mode (see the Decay audit section below).
+   - **DECAYED** is produced only in `--decay` mode; **ARCHIVE CANDIDATES** only in `--archive` mode (see both sections below).
 
 ## Reporting format
 
@@ -128,6 +128,80 @@ When the user says yes:
 - Do not edit the canonical `$MEMORY_PACK_HOME/SCHEMA.md` during a lint run — it is the user-editable contract that the audit is checking *against*, not a target of the audit. Read it to inform findings; never rewrite it. (A project-local `SCHEMA.md`, however, is a legacy orphan and should be flagged for removal.)
 - Do not add findings for things that are merely *old*. Age alone is not staleness; expired-future-events and dead-references are.
 
+## Archive mode (`/memory-lint --archive [N]`)
+
+Separate, opt-in mode. Moves leaf memories into `<memory-dir>/archive/` to shrink an over-cap `MEMORY.md`. Nothing is deleted — the archive is a recurrence detector, and `Memory.Pack/hooks/update-recall.mjs` promotes a file back to active after `MEMORY_PROMOTION_THRESHOLD` post-archive reads.
+
+**`N` is a ceiling, not a quota.** Ship fewer than `N` when the selector yields fewer, and say so. The moment the count drives the set instead of the selector, the run is unsafe.
+
+### Try trimming first
+
+Archiving is the second remedy. If the trigger is the byte cap ("entries too long"), **trim index lines over ~150 chars first** — zero memory loss, and it has repeatedly recovered enough bytes on its own. Key each trim on the line's **first** `](slug.md)` link, never on any matching substring: long rollup entries embed inline cross-reference links, so substring matching edits the wrong line.
+
+### Default selection: inbound cross-references
+
+Rank by **inbound cross-reference count**, ascending. For each candidate slug:
+
+```bash
+grep -l "](<slug>.md)" *.md    # exclude the file itself, MEMORY.md, and the session files
+```
+
+Archive only **leaf nodes — inbound ≤ 1**.
+
+⚠ **Do not rank by `recall_count` or decay strength**, even when the user asks for "the least used N". Both invert relevance in a well-recalled store: the recall hook stamps the *referencing* file, not its link targets, so the most cross-referenced hub memories sit at `recall_count: 0`. One past run archived the 50 "least used" that way and left 69 inbound links from 34 surviving files pointing into the archived set. When the user asks for "least used", state this once, then apply the inbound-xref selector. If the user asks again after hearing it, that is a decision — use `--by-recall` below.
+
+### `--by-recall`: the literal least-used ranking
+
+`/memory-lint --archive N --by-recall` ranks strictly by `recall_count` ascending, then by `strength` ascending as the tie-break — the literal "least used N". The age floor and the hard-excludes below still apply. This is an explicit operator override, so honor it when asked; do not substitute the inbound-xref ranking.
+
+Two things this mode must still do:
+
+1. **Show the inbound count on every candidate line anyway.** The ranking ignores it, the report does not — a candidate at `recall_count: 0, inbound: 12` is a hub, and the user needs to see that before confirming.
+2. **Say the risk once, in one sentence, then proceed.** For example: "8 of these 50 carry 3+ inbound links and will break cross-references." Do not re-argue after the user confirms.
+
+Everything else is unchanged: report and wait, `mv` the confirmed files, then run the canonicalizer and its `--check` verify.
+
+### Age floor
+
+Inbound-xref has the same cold-start defect: a memory written two days ago cannot have inbound links yet. Exclude any candidate where `age <= 7d`, with `age = today - max(last_recalled, created)`.
+
+### Hard excludes (regardless of inbound count)
+
+- Every `reference_*` memory — the schema says preserve.
+- The `/memory-lint` rule memories themselves, and any workflow meta-rule.
+- Memories about the current epic, the current incident, or today.
+- High-`recall_count` rows that are named precedents for a prior eviction decision.
+
+### Gather data with Bash, not Read
+
+Use `grep`/`awk`/`sed` to read frontmatter and bodies during selection. The `Read` tool fires `Memory.Pack/hooks/memory-recall.sh`, which stamps `last_recalled` and `recall_count` on every file you audit — that corrupts the very signal the audit measures.
+
+### Report, then wait
+
+Group candidates under an **ARCHIVE CANDIDATES** heading, weakest-first, one line each with slug, type, inbound count, age, and the reason it reads as a leaf:
+
+```
+## ARCHIVE CANDIDATES (33 of 50 requested)
+- `project_epic20_dispatch.md` (project) — inbound 0, age 64d — shipped, superseded by epic 23
+- `feedback_screens_dir_layout.md` (feedback) — inbound 1, age 91d — `screens/` removed in the 14Q teardown
+```
+
+End with: **"Want me to archive these? I'll go item by item."** Then wait. Never move a file before the user confirms.
+
+### Fix phase (archive mode)
+
+1. `mkdir -p <memory-dir>/archive`, then move each confirmed file with `mv` (a Bash-level move — the `Write` tool would trip `archive-resurrect.sh`).
+2. Remove each moved file's line from `MEMORY.md`.
+3. Canonicalize every cross-reference link in one pass:
+   ```bash
+   python3 $MEMORY_PACK_HOME/index/memory-links.py <memory-dir>
+   ```
+   The canonicalizer resolves each `](...slug.md)` by where `slug.md` actually lives and rewrites it — `](slug.md)` or `](archive/slug.md)` from an active file, `](slug.md)` or `](../slug.md)` from an archived one. It is idempotent and bidirectional, so it also repairs pre-existing rot and the `archive/archive/…` double-prefix that a one-way "add the prefix" patch creates. Ad-hoc one-way rewrites took three passes and kept reopening breaks — always use this script.
+4. Verify: re-run with `--check`. It must exit 0. The same run reconciles `MEMORY.md` against the on-disk active set, which catches orphan files and dead index entries that a byte-count check misses. Doc placeholders (`X.md`, `slug.md`) are classified separately and never counted as rot.
+5. Report the before/after line count and byte size of `MEMORY.md`.
+
+The FTS5 index needs no action — `hooks/memory-index-reconcile.sh` reindexes moves at SessionEnd.
+
 ## Decay audit (`/memory-lint --decay`)
 
 Separate, opt-in mode. Standard lint checks stale claims; `--decay` checks stale *confidence* using Ebbinghaus-inspired scoring from the canonical schema.
@@ -155,7 +229,7 @@ Group the output under a **DECAYED** severity and sort weakest-first. For each m
 - `reference_bar.md` (reference) — strength 0.27, never recalled, age 142d
 ```
 
-`<0.3` is a **surfacing threshold**, not an archive trigger. The historical `<0.1 AND 60d no recall` archive-candidate gate was removed — with the recall hook stamping `last_recalled` on every Read, it essentially never fired. **Archive proposals come from the INDEX CAP path** (see the main lint flow's section 7 "Index hygiene"), which kicks in when `MEMORY.md` approaches 150 lines and proposes FIFO / topic-overlap candidates (strength-ranking degenerates there — everything in use is fresh). Per-item fix flow is identical in DECAYED and INDEX CAP modes.
+`<0.3` is a **surfacing threshold**, not an archive trigger. The historical `<0.1 AND 60d no recall` archive-candidate gate was removed — with the recall hook stamping `last_recalled` on every Read, it essentially never fired. **Archive proposals come from `--archive`**, never from a strength ranking — strength degenerates in an active store, because everything in use stays fresh. Per-item fix flow is the same in both modes.
 
 End with: **"Want me to reinforce, edit, or archive these? I'll go item by item."**
 
