@@ -271,11 +271,19 @@ project store — types, frontmatter, decay model. No per-project copy.
    both `session_id`/`sessionId`, `hook_event_name`/`hookEventName`, etc.,
    or marker/boot-context writes silently no-op across CC releases.
 4. **Project slug** must mirror CC's `~/.claude/projects/<slug>` naming
-   (abs cwd, `/`+`.`→`-`) identically in `boot-inject.sh`, `replay.mjs`,
-   and `index-memories.py`, or memories mis-file. PROJECT_KEY is resolved
+   identically in `boot-inject.sh`, `replay.mjs`, `orphan-backstop.sh` and
+   `statusline-command.sh`, or memories mis-file. The rule is CC's own, read
+   off the 2.1.284 bundle: EVERY non-alphanumeric → `-`, and past 200 chars
+   the first 200 plus `-<base36 hash>` — single-sourced in `_mp_slugify`
+   (`_lib.sh`) and `slugify` (`_lib.mjs`). The engine's earlier `[/.]→-`
+   guess kept spaces and underscores, so a project under
+   `Application Support` or `x86_64-…` never matched its CC slug
+   (2026-09-29). Test fixtures must slugify by CC's rule or a LITERAL, never
+   by the engine's own helper — a self-consistent fixture is how the wrong
+   rule stayed green. PROJECT_KEY is resolved
    via `_mp_resolve_project_key` (`_lib.sh`) — anchor to CC's per-session
    slug (`basename(dirname(transcript_path))`) and walk up the
-   workspace/cwd ancestor whose `[/.]→-` slugification matches. The bare
+   workspace/cwd ancestor whose `_mp_slugify` value matches. The bare
    `${PROJECT_DIR:-${CWD:-$PWD}}` chain follows the user's mid-session
    `cd` and split-brains memory across subfolder hashes when
    `workspace.project_dir` is empty (the Pre.Audit symptom: a Green.World

@@ -92,7 +92,7 @@ mkdir -p "$SUB_REAL"
 . "$LIB"
 PARENT_HASH="$(printf '%s' "$PARENT_REAL" | _mp_hash)"
 SUB_HASH="$(printf '%s' "$SUB_REAL"    | _mp_hash)"
-PARENT_SLUG="$(printf '%s' "$PARENT_REAL" | sed 's|[/.]|-|g')"
+PARENT_SLUG="$(printf '%s' "$PARENT_REAL" | sed 's|[^a-zA-Z0-9]|-|g')"
 [ -n "$PARENT_HASH" ] && [ -n "$SUB_HASH" ] && [ "$PARENT_HASH" != "$SUB_HASH" ] \
   || { echo "FAIL  fixture: parent/sub hashes empty or equal"; exit 1; }
 
@@ -247,11 +247,12 @@ case "$SL_OUT4" in
          "expected '10/150' | out=[$SL_OUT4]" ;;
 esac
 
-# Encoding pin: underscore survives CC's [/.] → - slug; the legacy
-# [^a-zA-Z0-9] → - encoding flattened it and missed the store.
+# Encoding pin: CC's slug is replace(/[^a-zA-Z0-9]/g,"-") — read off the CC
+# 2.1.284 bundle and a live slug (x86_64 → x86-64). Underscore does NOT
+# survive; the engine's old [/.] → - rule missed every such store.
 PARENT_U="$TMP/Under_Score.Proj"
 mkdir -p "$PARENT_U"
-PARENT_U_SLUG="$(printf '%s' "$PARENT_U" | sed 's|[/.]|-|g')"
+PARENT_U_SLUG="$(printf '%s' "$PARENT_U" | sed 's|[^a-zA-Z0-9]|-|g')"
 TRANSCRIPT_DIR_U="$FAKE_HOME/.claude/projects/$PARENT_U_SLUG"
 mkdir -p "$TRANSCRIPT_DIR_U/memory"
 printf '%s\n' 1 2 3 4 5 6 7 8 9 10 11 12 > "$TRANSCRIPT_DIR_U/memory/MEMORY.md"
@@ -261,10 +262,57 @@ TRANSCRIPT5="$TRANSCRIPT_DIR_U/$SID5.jsonl"
 SL_STDIN5="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"},"model":{"display_name":"m"},"context_window":{"used_percentage":1}}' "$SID5" "$TRANSCRIPT5" "$PARENT_U" "$PARENT_U")"
 SL_OUT5="$(printf '%s' "$SL_STDIN5" | HOME="$FAKE_HOME" MEMORY_PACK_NERDFONT=0 "$SL_LINK" 2>/dev/null || true)"
 case "$SL_OUT5" in
-  *"12/150"*) ok "statusline mem indicator uses engine slug encoding (underscore path)" ;;
-  *) bad "statusline mem indicator uses engine slug encoding (underscore path)" \
+  *"12/150"*) ok "statusline mem indicator uses CC slug encoding (underscore path)" ;;
+  *) bad "statusline mem indicator uses CC slug encoding (underscore path)" \
          "expected '12/150' | out=[$SL_OUT5]" ;;
 esac
+
+# --- layer 6: the slug RULE itself is CC's, not the engine's guess ---------
+# Ground truth (CC 2.1.284 bundle):
+#   k(e)  = e.replace(/[^a-zA-Z0-9]/g,"-")
+#   PR(e) = k(e) if ≤200 chars, else k(e).slice(0,200) + "-" + abs(UJ(e)).toString(36)
+#   UJ    = Java-style 32-bit string hash over UTF-16 code units
+# LITERAL expectations on purpose: a fixture that slugifies with the engine's
+# own rule is self-consistent and proves nothing (how the [/.] rule survived).
+got="$(_mp_slugify '/a/My Proj_x.y@z')"
+[ "$got" = "-a-My-Proj-x-y-z" ] \
+  && ok "_mp_slugify maps every non-alphanumeric to - (space, _, ., @)" \
+  || bad "_mp_slugify maps every non-alphanumeric to - (space, _, ., @)" "got=[$got]"
+
+LONG="/$(printf 'seg_ment.%03d/' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)end"
+want="$(node -e '
+const UJ=t=>{let e=0;for(let n=0;n<t.length;n++)e=(e<<5)-e+t.charCodeAt(n)|0;return e};
+const k=e=>e.replace(/[^a-zA-Z0-9]/g,"-");
+const e=process.argv[1];const n=k(e);
+process.stdout.write(n.length<=200?n:`${n.slice(0,200)}-${Math.abs(UJ(e)).toString(36)}`)' "$LONG")"
+got="$(_mp_slugify "$LONG")"
+[ "${#LONG}" -gt 200 ] && [ -n "$got" ] && [ "$got" = "$want" ] \
+  && ok "_mp_slugify matches CC on a >200-char path (truncate + hash suffix)" \
+  || bad "_mp_slugify matches CC on a >200-char path (truncate + hash suffix)" "got=[$got] want=[$want]"
+
+# Resolver with a space + underscore in the project path (the live
+# 'Application Support' shape): cwd in a subfolder must resolve to the parent.
+SP_PARENT="$TMP/My Proj_1"
+mkdir -p "$SP_PARENT/sub/dir"
+SP_SLUG="$(printf '%s' "$SP_PARENT" | sed 's|[^a-zA-Z0-9]|-|g')"
+got="$(_mp_resolve_project_key "$FAKE_HOME/.claude/projects/$SP_SLUG/x.jsonl" "$SP_PARENT/sub/dir")"
+[ "$got" = "$SP_PARENT" ] \
+  && ok "resolver walks up to a parent whose path holds a space and an underscore" \
+  || bad "resolver walks up to a parent whose path holds a space and an underscore" "got=[$got]"
+
+# Structural: the retired rule must not survive as CODE anywhere it was used.
+for f in "$HERE/../hooks/_lib.sh" "$HERE/../hooks/boot-inject.sh" \
+         "$HERE/../hooks/orphan-backstop.sh" "$HERE/../hooks/memory-search-inject.sh" \
+         "$HERE/../hooks/replay.mjs" "$HERE/../statusline-command.sh"; do
+  if grep -v -E '^[[:space:]]*(#|//)' "$f" | grep -q -F -e "s|[/.]|-|g" -e '[\\/.]'; then
+    bad "$(basename "$f"): retired [/.] slug rule absent from code" "still present"
+  else
+    ok "$(basename "$f"): retired [/.] slug rule absent from code"
+  fi
+done
+grep -v -E '^[[:space:]]*//' "$HERE/../hooks/replay.mjs" | grep -q -F 'slugify(cwd)' \
+  && ok "replay.mjs derives the slug via the shared slugify()" \
+  || bad "replay.mjs derives the slug via the shared slugify()" "slugify(cwd) not found"
 
 echo "----"
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fail FAILED"; exit 1; fi

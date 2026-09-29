@@ -82,7 +82,7 @@ mk_transcript() {
   done
 }
 
-slugify() { printf '%s' "$1" | sed 's|[/.]|-|g'; }
+slugify() { printf '%s' "$1" | sed 's|[^a-zA-Z0-9]|-|g'; }
 
 # ---------------------------------------------------------------------------
 # Layer A: session-end.sh stamps <sid>_end_handled on every handled path

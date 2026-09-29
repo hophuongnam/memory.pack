@@ -193,7 +193,7 @@ SQL
 # Project display prefix: strip the slugified $HOME so store slugs read as
 # project names on ANY host (the old hardcoded -Users-namhp-Resilio-Sync-
 # prefix only ever matched the original machine).
-HOME_SLUG=$(printf '%s' "$HOME" | sed 's|[/.]|-|g')
+HOME_SLUG=$(printf '%s' "$HOME" | LC_ALL=C sed 's|[^a-zA-Z0-9]|-|g')
 
 BODY=$(printf '%s\n' "$HITS" | awk -F$'\x01' \
   -v t="$THRESHOLD" -v cap="$OUTPUT_LIMIT" \

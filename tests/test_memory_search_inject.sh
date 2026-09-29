@@ -307,7 +307,7 @@ esac
 # The short_project display stripped a HARDCODED -Users-namhp-Resilio-Sync-
 # prefix — every other host showed the full slug. Derive from slugified
 # $HOME instead.
-HOME_SLUG=$(printf '%s' "$HOME" | sed 's|[/.]|-|g')
+HOME_SLUG=$(printf '%s' "$HOME" | sed 's|[^a-zA-Z0-9]|-|g')
 GMEM="$HOME/.claude/projects/${HOME_SLUG}-proj-gamma/memory"
 mkdir -p "$GMEM"
 cat > "$GMEM/reference_gamma_doc.md" <<'MD'

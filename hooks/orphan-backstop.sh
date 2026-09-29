@@ -183,7 +183,7 @@ do_pass() {
     while IFS= read -r c; do
       [ -n "$c" ] || continue
       key=$(_mp_resolve_project_key "$t" "$c")
-      if [ "$(printf '%s' "$key" | sed 's|[/.]|-|g')" = "$slug" ]; then
+      if [ "$(_mp_slugify "$key")" = "$slug" ]; then
         cwd="$key"
         break
       fi

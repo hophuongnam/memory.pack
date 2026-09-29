@@ -40,11 +40,55 @@ _mp_hash() {
   fi
 }
 
+# _mp_slugify: CC's project-dir slug for an absolute path, byte-for-byte.
+# Ground truth is the CC bundle (read off 2.1.284), NOT a guess:
+#   k(e)  = e.replace(/[^a-zA-Z0-9]/g,"-")
+#   PR(e) = k(e) if ≤200 chars, else k(e).slice(0,200)+"-"+abs(UJ(e)).toString(36)
+#   UJ    = Java-style 32-bit string hash over UTF-16 code units
+# The engine's earlier `[/.] → -` rule kept spaces and underscores, so every
+# project under e.g. "Application Support" or "x86_64-…" slugified to a dir CC
+# never wrote: the resolver below found no ancestor and fell back to the live
+# cwd (invariant #4 split-brain), and MEMORY_DIR pointed at nothing.
+# Fast path (pure ASCII, ≤200 chars) is one sed fork. python3 only for the
+# rare rest: JS counts UTF-16 code units, which sed cannot — a non-BMP
+# character is TWO dashes in CC's slug.
+_mp_slugify() {
+  case "$1" in
+    *[!\ -~]*) ;;
+    *) if [ "${#1}" -le 200 ]; then
+         printf '%s' "$1" | LC_ALL=C sed 's|[^a-zA-Z0-9]|-|g'
+         return 0
+       fi ;;
+  esac
+  python3 -c '
+import sys
+s = sys.argv[1]
+b = s.encode("utf-16-le", "surrogatepass")
+units = [int.from_bytes(b[i:i+2], "little") for i in range(0, len(b), 2)]
+r = "".join(chr(c) if (48 <= c <= 57 or 65 <= c <= 90 or 97 <= c <= 122) else "-" for c in units)
+if len(r) > 200:
+    e = 0
+    for c in units:
+        e = ((e << 5) - e + c) & 0xFFFFFFFF
+    if e >= 0x80000000:
+        e -= 0x100000000
+    e = abs(e)
+    d = ""
+    while True:
+        e, m = divmod(e, 36)
+        d = "0123456789abcdefghijklmnopqrstuvwxyz"[m] + d
+        if e == 0:
+            break
+    r = r[:200] + "-" + d
+sys.stdout.write(r)
+' "$1"
+}
+
 # _mp_resolve_project_key: derive PROJECT_KEY anchored to CC's authoritative
 # per-session slug (= basename of dirname of transcript_path), not the live
 # cwd. Walks up from $2 (best-guess starting dir, normally
 # workspace.project_dir-or-cwd-or-$PWD) looking for the ancestor whose
-# [/.] → - slugification equals CC's slug. That ancestor is the project
+# _mp_slugify value equals CC's slug. That ancestor is the project
 # root CC chose at session launch; using it keeps every Memory.Pack hash /
 # slug / MEMORY_DIR / boot-context filename aligned with what CC writes the
 # JSONL under.
@@ -79,7 +123,7 @@ _mp_resolve_project_key() {
   fi
   _mp_dir="$_mp_fallback"
   while [ -n "$_mp_dir" ] && [ "$_mp_dir" != "/" ] && [ "$_mp_dir" != "." ]; do
-    _mp_candidate=$(printf '%s' "$_mp_dir" | sed 's|[/.]|-|g')
+    _mp_candidate=$(_mp_slugify "$_mp_dir")
     if [ "$_mp_candidate" = "$_mp_cc_slug" ]; then
       printf '%s' "$_mp_dir"
       return 0

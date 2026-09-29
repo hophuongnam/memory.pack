@@ -48,8 +48,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty')
 PROJECT_KEY=$(_mp_resolve_project_key "$TRANSCRIPT" "${PROJECT_DIR:-${CWD:-$PWD}}")
 PROJECT_HASH=$(printf '%s' "$PROJECT_KEY" | _mp_hash)
-# Slug mirrors Claude Code's project dir naming: abs cwd with `/` and `.` → `-`.
-PROJECT_SLUG=$(printf '%s' "$PROJECT_KEY" | sed 's|[/.]|-|g')
+# Slug mirrors Claude Code's project dir naming (_mp_slugify, invariant #4).
+PROJECT_SLUG=$(_mp_slugify "$PROJECT_KEY")
 MEMORY_DIR="$HOME/.claude/projects/${PROJECT_SLUG}/memory"
 SESSION_LOG="$MEMORY_DIR/sessions.log.md"
 SESSIONS_INDEX="$MEMORY_DIR/SESSIONS.md"

@@ -10,8 +10,8 @@
 //        encodes spaces -> a wrong engine path even on POSIX if the install
 //        dir contains a space)
 //   * cwd.split('/')          -> path.basename(cwd)       (separator-aware)
-//   * slug /[/.]/g            -> /[\\/.]/g                 (strict superset;
-//        POSIX byte-identical — POSIX paths contain no backslash)
+//   * slug /[/.]/g            -> slugify() = CC's /[^a-zA-Z0-9]/g rule
+//        (collapses Windows separators too)
 //   * endsWith('/archive')    -> basename(dir)==='archive' (separator-aware)
 //
 // Out of scope (documented native-Windows boundary, NOT fixed here because
@@ -51,7 +51,7 @@ present('replay.mjs: uses fileURLToPath',           replay, 'fileURLToPath(impor
 absent ('replay.mjs: no cwd.split("/")',            replay, "cwd.split('/')");
 present('replay.mjs: uses path.basename(cwd)',      replay, 'path.basename(cwd)');
 absent ('replay.mjs: slug not POSIX-only /[/.]/g',  replay, 'cwd.replace(/[/.]/g');
-present('replay.mjs: slug separator-aware [\\\\/.]', replay, '[\\\\/.]');
+present('replay.mjs: slug via shared slugify()',      replay, 'slugify(cwd)');
 
 const ur = read('update-recall.mjs');
 absent ('update-recall.mjs: no import.meta.url .pathname', ur, 'import.meta.url).pathname');

@@ -69,13 +69,22 @@ mp_proj_hash() {
 # Mirror of hooks/_lib.sh _mp_resolve_project_key — invariant #2 parity:
 # the writers (boot-inject.sh / session-end.sh) now anchor PROJECT_KEY to
 # CC's per-session slug (= basename of dirname of transcript_path) by
-# walking up from the best-guess dir to the ancestor whose [/.] → -
-# slugification equals CC's slug. Statusline MUST do the same or
+# walking up from the best-guess dir to the ancestor whose slug equals
+# CC's slug. Statusline MUST do the same or
 # .skip-replay-<hash> targets the wrong sentinel on every session whose
 # workspace.project_dir is empty or whose hooks resolved to a parent the
 # stdin `project_dir` field misses. Same self-locating, OS-portable
 # behavior as the helper in _lib.sh; not sourced because this script is
 # /bin/sh and lives outside hooks/.
+# CC's slug rule is every non-alphanumeric → `-` (CC bundle 2.1.284; see
+# _mp_slugify in hooks/_lib.sh for the full contract).
+# ponytail: ASCII + ≤200-char paths only — no python3 fork in the render
+# path. A longer or non-ASCII project path hides the memory indicator;
+# port _mp_slugify's slow path here if such a project ever exists.
+mp_slugify() {
+    printf '%s' "$1" | LC_ALL=C sed 's|[^a-zA-Z0-9]|-|g'
+}
+
 mp_resolve_project_key() {
     _tp="$1"
     _fb="$2"
@@ -84,7 +93,7 @@ mp_resolve_project_key() {
     [ -z "$_slug" ] && { printf '%s' "$_fb"; return; }
     _d="$_fb"
     while [ -n "$_d" ] && [ "$_d" != "/" ] && [ "$_d" != "." ]; do
-        if [ "$(printf '%s' "$_d" | sed 's|[/.]|-|g')" = "$_slug" ]; then
+        if [ "$(mp_slugify "$_d")" = "$_slug" ]; then
             printf '%s' "$_d"; return
         fi
         _d=$(dirname "$_d")
@@ -160,12 +169,10 @@ fi
 # settings.json) so nothing fights this. Headless/no-tty → silent no-op.
 { printf '\033]1;%s\007' "$dir" > /dev/tty; } 2>/dev/null || true
 
-# Find memory dir for the current project. Slug encoding MUST be the
-# engine's `[/.] → -` (boot-inject.sh / replay.mjs / index-memories.py —
-# invariant #4); the legacy [^a-zA-Z0-9] → - flattened `_` and friends
-# into `-`, silently hiding the indicator for any such project path.
+# Find memory dir for the current project. Slug encoding MUST be CC's
+# (invariant #4), which flattens `_`, space and friends into `-`.
 if [ -n "$proj_key" ]; then
-    encoded_proj=$(printf '%s' "$proj_key" | sed 's|[/.]|-|g')
+    encoded_proj=$(mp_slugify "$proj_key")
     mem_dir="$MEMORY_BASE/$encoded_proj/memory"
     if [ -d "$mem_dir" ]; then
         mem_lines=$(wc -l < "$mem_dir/MEMORY.md" 2>/dev/null | tr -d ' ')

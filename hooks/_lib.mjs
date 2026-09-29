@@ -6,6 +6,16 @@ import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync } fro
 const SDK_REL = 'node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk/sdk.mjs';
 
+// CC's project-dir slug, copied from the CC bundle (2.1.284) — see
+// _mp_slugify in _lib.sh, which must stay value-equal (invariant #4).
+export function slugify(p) {
+  const s = p.replace(/[^a-zA-Z0-9]/g, '-');
+  if (s.length <= 200) return s;
+  let h = 0;
+  for (let i = 0; i < p.length; i++) h = ((h << 5) - h + p.charCodeAt(i)) | 0;
+  return `${s.slice(0, 200)}-${Math.abs(h).toString(36)}`;
+}
+
 // fmParse / fmSetInPlace / fmSerialize — the one sanctioned way for engine
 // code to touch memory-file frontmatter. Contract (SCHEMA.md; pinned by
 // test_recall_frontmatter_preserve + test_archive_resurrect_preserve):

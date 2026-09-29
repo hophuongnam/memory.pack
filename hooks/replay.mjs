@@ -10,7 +10,7 @@
 //      ~/.claude/projects/<slug>/memory/PENDING_MEMORIES.md for human-in-the-
 //      loop review by a future session.
 
-import { resolveSdkSpecifier, extractConversation, truncateConversation, isUsageLimitSignal } from './_lib.mjs';
+import { resolveSdkSpecifier, extractConversation, truncateConversation, isUsageLimitSignal, slugify } from './_lib.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -98,13 +98,10 @@ if (!transcript.trim()) {
 // across prior sessions (e.g. "this is the 3rd session on the auth
 // rewrite"). SESSIONS.md is maintained by boot-inject.sh.
 // ───────────────────────────────────────────────────────────────────────
-// Mirrors Claude Code's project-dir slug: abs cwd with `/` and `.` -> `-`.
-// The `\\` in the class is a POSIX-byte-identical superset (POSIX paths
-// contain no backslash) that also collapses Windows separators; CC's exact
-// native-Windows slug encoding is unverified, so full native parity is a
-// documented boundary, not a claim. os.homedir() replaces process.env.HOME
+// Claude Code's project-dir slug (every non-alphanumeric -> `-`, which
+// collapses Windows separators too). os.homedir() replaces process.env.HOME
 // (unset on Windows; identical to $HOME on POSIX).
-const slug = cwd.replace(/[\\/.]/g, '-');
+const slug = slugify(cwd);
 const memoryDir = path.join(os.homedir(), '.claude', 'projects', slug, 'memory');
 
 let memoryDirExists = false;
