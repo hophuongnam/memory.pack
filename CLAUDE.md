@@ -32,8 +32,7 @@ clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Architecture
 
-**16 hook registrations** (canonical list: `install/hooks.manifest.json`):
-`PreToolUse` (matcher `Agent`)→usage-inject;
+**15 hook registrations** (canonical list: `install/hooks.manifest.json`):
 `SessionStart`→boot-inject + orphan-backstop; `UserPromptSubmit`→boot-inject + memory-search-inject;
 `SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
 log-token-rate + fetch-usage; `PostToolUse` (matcher-less, all tools)→boot-catchup,
@@ -254,27 +253,14 @@ account. `test_fetch_usage` Layer 4 pins that boundary structurally, including
 `statusline-command.sh`, which is the one file holding BOTH kinds. Full
 reasoning: `project_multi_account_config_dir` in the project store.
 
-**Quota gate on subagent launches** (`hooks/usage-inject.sh`, PreToolUse
-matcher `Agent`, 2026-09-29): the main agent must know the quota BEFORE it
-launches a subagent. PreToolUse fires after the model decided to launch, so
-`additionalContext` arrives one launch too late — only a DENY stops the call,
-and `permissionDecisionReason` is what reaches the model. When the 5h window
-is ABOVE 90% (strict; the 7d window never gates) the hook denies EVERY launch
-— a HARD STOP, user decision 2026-09-29. It keeps no state and parses no
-stdin field; the gate opens by itself when the statusline writes a value at
-or under 90, or when the reset time passes. The reason text tells the model
-NOT to retry. **Fails OPEN on the data** (no cache, torn row, unknown or past
-reset) — a false deny is a subagent kill switch. The data is `hook_state/usage_windows`
-(`<write_epoch>\n<pct> <resets_epoch> 5h`, per-ACCOUNT bucket), written
-by `statusline-command.sh` on every render that carries `rate_limits` —
-hooks never see that stdin, and the statusline is fresher than the 120s Stop
-worker. A row is current exactly while its reset time is ahead (usage only
-grows inside a window), so no age cap is needed. The other subagent hooks
-are dead ends, read off bundle 2.1.284 + real transcripts: SubagentStop's
-additionalContext goes to the SUBAGENT and makes it continue (burns quota);
-PostToolUse on `Agent` fires at LAUNCH because every subagent runs in the
-background; TaskCompleted has no injection output. Pinned by
-`test_usage_inject`.
+**5h usage file** (`statusline-command.sh`, 2026-09-29): every render that
+carries `rate_limits.five_hour` atomically writes the 5h percentage, rounded
+to an integer, as ONE line (`94`) to `/tmp/claude-usage-5h`
+(`MP_USAGE_5H_FILE` overrides). No rate_limits or a garbage value leaves the
+last-good file alone. One file per HOST: two accounts overwrite each other.
+It replaced the PreToolUse/Agent quota gate (`usage-inject.sh`), which did
+not work for the user and was removed the same day. Pinned by
+`test_usage_5h_file`.
 
 **FTS5 search** (`index/`): `index-memories.py` walks all
 `~/.claude/projects/*/memory/**/*.md` → SQLite `search.db` (gitignored,
@@ -555,22 +541,17 @@ config-dir-scoped Keychain service name, the default dir and an explicit
 slash normalized, the config-dir plaintext fallback, the shared
 `.credentials.json` refused as a cross-account fallback, and the TTL gate
 reading the config-dir cache while a fresh SHARED stamp does not gate it.
-Layer 4 is the structural bucket boundary: no hook outside the usage trio
-(plus `usage-inject.sh`, the reader of the per-account `usage_windows`) may
+Layer 4 is the structural bucket boundary: no hook outside the usage trio may
 name CLAUDE_CONFIG_DIR (comment-stripped scan, mutation-verified against a
 planted reference in session-end.sh), and inside `statusline-command.sh` —
 allowlisted because it holds both buckets — `HOOK_STATE_DIR` is pinned by
 value at `$HOME/.claude/hook_state` with the per-account readers capped at
 exactly 2),
-`test_usage_inject` (the quota gate: Layer 1 the >90% 5h-only gate — deny
-shape, reason text, the strict 90/91 boundary, a full 7d row never gating, reset-passed and unknown-reset rows ignored,
-torn cache silent under real dash; Layer 2 the hard stop — each call denied,
-no state written, the do-not-retry reason, no stdin shape opens the gate, the
-gate opens when the value falls, MP_REPLAY_CHILD; Layer 3 the per-account
-bucket; Layer 4 the REAL statusline as writer — integer rounding, last-good
-kept when `rate_limits` is absent, garbage never blanks the render; Layer 5
-wiring. Mutation-verified: the strict operator, the 5h label filter, the
-reset-ahead check, float write),
+`test_usage_5h_file` (the statusline writes `/tmp/claude-usage-5h` as one
+integer line — rounding mutation-verified, last-good kept when `rate_limits`
+or its 5h window is absent, garbage never blanks the render under real dash,
+no tmp litter; plus the removed quota gate stays removed: no hook script, no
+manifest entry),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
 `.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs

@@ -384,9 +384,7 @@ worker_ran && ok "cfg: fresh SHARED cache does not gate a config-dir session" \
 # otherwise satisfy a presence-only grep.
 # ══════════════════════════════════════════════════════════════════════════
 ENGINE="$HERE/.."
-# usage-inject.sh READS the per-account usage_windows the statusline writes
-# (the quota gate on subagent launches) — bucket 2 by the same reasoning.
-allowed="fetch-usage.sh fetch-usage-worker.sh usage-inject.sh statusline-command.sh"
+allowed="fetch-usage.sh fetch-usage-worker.sh statusline-command.sh"
 offenders=""
 for f in "$ENGINE"/hooks/*.sh "$ENGINE"/hooks/*.mjs "$ENGINE"/statusline-command.sh; do
   [ -f "$f" ] || continue
@@ -416,7 +414,7 @@ n=$(sed -e 's/^[[:space:]]*#.*$//' "$SL" | grep -c 'CLAUDE_CONFIG_DIR')
 
 # The three that DO follow it must actually still do so (a deleted line would
 # otherwise pass the scan above by being absent everywhere).
-for base in fetch-usage.sh fetch-usage-worker.sh usage-inject.sh; do
+for base in fetch-usage.sh fetch-usage-worker.sh; do
   grep -q 'CLAUDE_CONFIG_DIR' "$ENGINE/hooks/$base" \
     && ok "bucket boundary: $base reads CLAUDE_CONFIG_DIR" \
     || bad "bucket boundary: $base reads CLAUDE_CONFIG_DIR"
