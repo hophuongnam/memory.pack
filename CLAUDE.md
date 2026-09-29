@@ -332,7 +332,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-27 suites in `tests/` — run all before any commit (CI mirrors the same
+28 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
 fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
 suites fail:
@@ -496,6 +496,12 @@ tiny corpus and the production -8.0 threshold can never be cleared),
 hook.log >512KB→500 lines; log-token-rate rotates >4000→2000 lines with
 newest samples surviving; boot-inject SessionStart sweeps legacy
 `.statusline-clock-*`; every sweep has a keep-fresh mutation guard),
+`test_index_tools` (the two index-side tools no suite drove before
+2026-09-29: `memory-links.py` — `--selftest`, a behavioral rewrite with no
+tmp litter and the file mode kept, and a structural pin that the rewrite is
+write+rename, never an in-place truncating write; and
+`memory-index-reconcile.sh` — exits 0 silently and runs the co-located
+indexer with `--quiet`),
 `test_archive_resurrect_preserve` (resurrect must not reshape: nested
 `metadata:` children/`node_type` survive byte-for-byte while
 created/recall_count inherit and last_reviewed stamps; malformed files

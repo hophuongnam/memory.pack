@@ -11,7 +11,7 @@ many times as you like. Used by /memory-lint --archive after moving files.
 Direct file writes on purpose — no Claude Read/Write hook fires, so recall
 counters and the archive-resurrect trap stay out of the way.
 """
-import os, re, sys
+import os, re, shutil, sys
 
 LINK = re.compile(r"\]\((?:\.\./|archive/)?([A-Za-z0-9_][A-Za-z0-9_.-]*\.md)\)")
 # ponytail: hook-maintained, not memories — scanned for nothing, never rewritten.
@@ -48,8 +48,13 @@ def canonicalize(mem_dir, check=False):
         if new != text:
             rewritten.append(name)
             if not check:
-                with open(path, "w", encoding="utf-8") as fh:
+                # write+rename: an in-place "w" truncates first, so an
+                # interrupt mid-write loses the memory body.
+                tmp = f"{path}.tmp.{os.getpid()}"
+                with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(new)
+                shutil.copymode(path, tmp)
+                os.replace(tmp, path)
 
     for f in sorted(active):
         fix(os.path.join(mem_dir, f), f, False)
@@ -78,7 +83,7 @@ def canonicalize(mem_dir, check=False):
 
 
 def selftest():
-    import tempfile, shutil
+    import tempfile
     d = tempfile.mkdtemp()
     try:
         os.makedirs(os.path.join(d, "archive"))
