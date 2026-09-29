@@ -109,6 +109,56 @@ function run(path, sid, extraEnv = {}) {
       ' promote promo.md (recall_count=3');
 }
 
+// === label derivation (titleFromFilename) — every transform pinned ======
+// The promo.md / nested.md fixtures exercise NONE of the transforms:
+// deleting all of them left this suite green (mutation-verified 2026-09-29).
+{
+  const label = (file, desc = 'd', type = 'feedback', seed = null) => {
+    const mem = mkStore('t-' + file.replace(/\W/g, ''));
+    if (seed) writeFileSync(join(mem, 'MEMORY.md'), seed);
+    const arch = join(mem, 'archive', file);
+    writeFileSync(arch, FM('n', desc, type, 2));
+    run(arch, 'sid-t');
+    return readFileSync(join(mem, 'MEMORY.md'), 'utf8')
+      .split('\n').find((l) => l.includes(`](${file})`) && l.startsWith(`- ${today}`)) || '';
+  };
+
+  has('label: type prefix stripped, _ and - become spaces, capitalized',
+      label('feedback_foo_bar-baz.md'), '[Foo bar baz](feedback_foo_bar-baz.md)');
+  has('label: reference prefix stripped too',
+      label('reference_cc_hook.md', 'd', 'reference'), '[Cc hook](reference_cc_hook.md)');
+  has('label: trailing _YYYYMMDD dropped (SCHEMA.md index rule)',
+      label('project_incident_20260101.md', 'd', 'project'),
+      '[Incident](project_incident_20260101.md)');
+  has('label: never empty — falls back to the slug',
+      label('feedback_.md'), '[feedback_](feedback_.md)');
+
+  const long = label('feedback_a_fairly_long_memory_slug_name.md', 'x'.repeat(200));
+  (long.length > 0 && long.length <= 150)
+    ? ok('row: a long slug + long description still fits the 150-char index limit')
+    : bad('row: a long slug + long description still fits the 150-char index limit', '1..150', long.length);
+
+  // Idempotency keys on a ROW's own link target. An inline cross-reference in
+  // another row's hook text must not read as "already indexed" — the promoted
+  // file would have no pointer line: an orphan never loaded at boot.
+  const seed = ['# Memory Index', '', '## User & feedback',
+    '- 2026-01-01 [Seed](seed.md) — see [x](feedback_x_y.md) and [feedback_x_y.md]',
+    '', '## Projects', '', '## Infrastructure & reference', ''].join('\n');
+  has('guard: an inline cross-reference in another row does not block the insert',
+      label('feedback_x_y.md', 'd', 'feedback', seed), '[X y](feedback_x_y.md)');
+
+  const legacy = ['# Memory Index', '', '## User & feedback',
+    '- 2026-01-01 [feedback_old_row.md](feedback_old_row.md) — legacy filename label',
+    '', '## Projects', '', '## Infrastructure & reference', ''].join('\n');
+  eq('guard: an existing row (legacy filename label) is still recognized — no duplicate',
+     '', label('feedback_old_row.md', 'd', 'feedback', legacy));
+
+  const src = readFileSync(RECALL, 'utf8').split('\n')
+    .filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  has('index write uses a pid-suffixed tmp (concurrent promotions lost an entry)',
+      src, 'promote.tmp.${process.pid}');
+}
+
 // === collision: active file of the same name exists → skip, log, bump ===
 {
   const mem = mkStore('s2');

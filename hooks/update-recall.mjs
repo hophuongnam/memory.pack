@@ -213,17 +213,31 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
   );
 }
 
-// Human title for an index label, derived from the slug: strip the type
-// prefix and any trailing _YYYYMMDD (the line already carries a date),
-// underscores to spaces, capitalize. Mirrors what /memory-lint writes.
+// Memory type → MEMORY.md section. The ONE list of types in this file: the
+// label's prefix strip below is derived from its keys. A function, not a
+// const: the top-level promotion code above runs before any const down here
+// is initialized (function declarations hoist, consts do not).
+function sectionByType() {
+  return {
+    user: '## User & feedback',
+    feedback: '## User & feedback',
+    project: '## Projects',
+    reference: '## Infrastructure & reference',
+  };
+}
+
+// Human title for an index label, derived from the slug per SCHEMA.md's
+// index rule: strip the type prefix and any trailing _YYYYMMDD, `_`/`-` to
+// spaces, capitalize. Never empty — a slug that reduces to nothing keeps
+// itself as the label, since an empty link text cannot be found or clicked.
 function titleFromFilename(filename) {
-  const t = filename
-    .replace(/\.md$/, '')
-    .replace(/^(feedback|project|reference|user)_/, '')
+  const slug = filename.replace(/\.md$/, '');
+  const t = slug
+    .replace(new RegExp(`^(${Object.keys(sectionByType()).join('|')})_`), '')
     .replace(/_\d{8}$/, '')
-    .replace(/_/g, ' ')
+    .replace(/[_-]/g, ' ')
     .trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : slug;
 }
 
 function updateMemoryIndex(activePath, keys) {
@@ -236,27 +250,28 @@ function updateMemoryIndex(activePath, keys) {
   let desc = keys.get('description') || '';
   // Strip surrounding quotes if any (frontmatter parsing keeps them).
   desc = desc.replace(/^["']|["']$/g, '');
-  if (desc.length > 120) desc = desc.slice(0, 117) + '…';
   const type = (keys.get('type') || 'feedback').toLowerCase();
 
-  const sectionMap = {
-    user: '## User & feedback',
-    feedback: '## User & feedback',
-    project: '## Projects',
-    reference: '## Infrastructure & reference',
-  };
-  const section = sectionMap[type] || '## User & feedback';
+  const section = sectionByType()[type] || '## User & feedback';
 
   let content = readFileSync(indexPath, 'utf8');
 
-  // Idempotency: if the filename already appears in the index, do nothing.
-  // Match `(<filename>)` or `[<filename>]` to catch any link form.
-  if (content.includes(`(${filename})`) || content.includes(`[${filename}]`)) {
-    return false;
-  }
-
-  const entry = `- ${today} [${titleFromFilename(filename)}](${filename}) — ${desc}`;
   const lines = content.split('\n');
+
+  // Idempotency: a ROW already points at this file — keyed on the row's own
+  // (first) link target, per SCHEMA.md, whatever its label. Matching the
+  // filename anywhere took an inline cross-reference in ANOTHER row's hook
+  // text for "already indexed" and left the promoted file with no pointer.
+  const rowTarget = (l) => (/^\s*- /.test(l) ? (l.match(/\]\(([^)]+)\)/) || [])[1] : undefined);
+  if (lines.some((l) => rowTarget(l) === filename)) return false;
+
+  // SCHEMA.md caps an index row at 150 chars. The description takes what the
+  // fixed part leaves, floor 20 — a very long slug can still exceed the cap,
+  // since the link target cannot be shortened.
+  const head = `- ${today} [${titleFromFilename(filename)}](${filename}) — `;
+  const room = Math.max(20, 150 - head.length);
+  if (desc.length > room) desc = desc.slice(0, room - 1) + '…';
+  const entry = head + desc;
   const sectionIdx = lines.findIndex((l) => l.trim() === section);
 
   if (sectionIdx < 0) {
@@ -273,7 +288,10 @@ function updateMemoryIndex(activePath, keys) {
   }
 
   const out = lines.join('\n');
-  const tmp = `${indexPath}.promote.tmp`;
+  // pid-suffixed like the recall tmp above: on one fixed name, two concurrent
+  // promotions installed each other's content and one entry vanished while
+  // its audit line said index_updated=true.
+  const tmp = `${indexPath}.promote.tmp.${process.pid}`;
   writeFileSync(tmp, out);
   renameSync(tmp, indexPath);
   return true;
