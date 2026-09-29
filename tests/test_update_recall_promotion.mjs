@@ -93,8 +93,8 @@ function run(path, sid, extraEnv = {}) {
 
   const idx = readFileSync(join(mem, 'MEMORY.md'), 'utf8');
   has('promote: MEMORY.md gains pointer line', idx,
-      `- ${today} [promo.md](promo.md) — promoted desc`);
-  const at = idx.indexOf('[promo.md]');
+      `- ${today} [Promo](promo.md) — promoted desc`);
+  const at = idx.indexOf('](promo.md)');   // key on the link target: label is a title now
   (at > idx.indexOf('## User & feedback') && at < idx.indexOf('## Projects'))
     ? ok('promote: entry lands in the type section')
     : bad('promote: entry lands in the type section',
@@ -159,7 +159,7 @@ function run(path, sid, extraEnv = {}) {
   eq('nested archive: no stray log inside archive/sub', false,
      existsSync(join(mem, 'archive', 'sub', '.archive-promote.log')));
   const idx = readFileSync(join(mem, 'MEMORY.md'), 'utf8');
-  const at = idx.indexOf('[nested.md]');
+  const at = idx.indexOf('](nested.md)');  // key on the link target: label is a title now
   (at > idx.indexOf('## Infrastructure & reference'))
     ? ok('nested archive: reference type lands in reference section')
     : bad('nested archive: reference type lands in reference section',

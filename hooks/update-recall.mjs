@@ -213,6 +213,19 @@ function promoteFromArchive(archivePath, keys, recallCount, markerNameForMove) {
   );
 }
 
+// Human title for an index label, derived from the slug: strip the type
+// prefix and any trailing _YYYYMMDD (the line already carries a date),
+// underscores to spaces, capitalize. Mirrors what /memory-lint writes.
+function titleFromFilename(filename) {
+  const t = filename
+    .replace(/\.md$/, '')
+    .replace(/^(feedback|project|reference|user)_/, '')
+    .replace(/_\d{8}$/, '')
+    .replace(/_/g, ' ')
+    .trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 function updateMemoryIndex(activePath, keys) {
   const memDir = dirname(activePath);
   const indexPath = join(memDir, 'MEMORY.md');
@@ -242,7 +255,7 @@ function updateMemoryIndex(activePath, keys) {
     return false;
   }
 
-  const entry = `- ${today} [${filename}](${filename}) — ${desc}`;
+  const entry = `- ${today} [${titleFromFilename(filename)}](${filename}) — ${desc}`;
   const lines = content.split('\n');
   const sectionIdx = lines.findIndex((l) => l.trim() === section);
 
