@@ -269,7 +269,7 @@ try {
     let existingFiles = [];
     try {
       existingFiles = (await fs.readdir(memoryDir))
-        .filter(f => f.endsWith('.md') && !['MEMORY.md', 'sessions.log.md', 'PENDING_MEMORIES.md'].includes(f))
+        .filter(f => f.endsWith('.md') && !['MEMORY.md', 'sessions.log.md', 'SESSIONS.md', 'PENDING_MEMORIES.md'].includes(f))
         .sort();
     } catch {}
 

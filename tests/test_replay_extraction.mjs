@@ -352,6 +352,18 @@ export async function* query(args) {
   rmSync(sbx, { recursive: true, force: true });
 }
 
+// Pass 2 tells the promotion agent which memory FILES exist. The hook-owned
+// bookkeeping files are not memories: listing one invites a "duplicate of
+// SESSIONS.md" rationale. All three must be excluded (memory-links.py SKIP
+// holds the same three).
+{
+  const m = replaySrc.match(/existingFiles = [\s\S]*?\.filter\(([\s\S]*?)\)\s*\.sort\(\)/);
+  const filt = m ? m[1] : '';
+  for (const f of ['MEMORY.md', 'sessions.log.md', 'SESSIONS.md', 'PENDING_MEMORIES.md']) {
+    check(`pass 2 file list excludes ${f}`, filt.includes(`'${f}'`), filt.slice(0, 120));
+  }
+}
+
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
 console.log(`${fail} FAILED`); process.exit(1);
