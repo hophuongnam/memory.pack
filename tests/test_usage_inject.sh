@@ -7,8 +7,11 @@
 # Goal: the main agent must know the quota BEFORE it launches a subagent.
 # PreToolUse fires after the model already decided to launch, so context alone
 # arrives one launch too late — only a DENY stops the call, and its reason is
-# what reaches the model. The gate therefore denies ONCE per session when the
-# 5h window is ABOVE 90%, then lets the re-issued call through.
+# what reaches the model.
+#
+# HARD STOP (user decision 2026-09-29): EVERY launch is denied while the 5h
+# window is ABOVE 90%. No once-only marker, no session state: the gate opens
+# when the statusline writes a value at or under 90, or the reset time passes.
 #
 # 5h ONLY (user decision 2026-09-29): the hook ignores the 7d window and the
 # statusline does not write it. The fixtures below still plant a 7d row — files written before this
@@ -130,88 +133,52 @@ out=$(run); rc=$?
   && ok "torn stamp: the good row still trips" || bad "torn stamp: the good row still trips" "rc=$rc err=$(cat "$SBX/err")"
 
 # ══════════════════════════════════════════════════════════════════════════
-# LAYER 2 — deny ONCE. A gate that denies every call is a subagent kill switch.
+# LAYER 2 — HARD STOP: every launch is denied, and the hook keeps NO state.
 # ══════════════════════════════════════════════════════════════════════════
-MARK="$STATE/sid-1_quota_warned"
 
-# O1 — first call denies and stamps the session marker.
+# H1 — the second and the third call are denied like the first. Mutation: a
+# once-only marker coming back turns these red.
 reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
+o1=$(run); o2=$(run); sleep 4; o3=$(run)
+[ -n "$o1" ] && [ -n "$o2" ] && [ -n "$o3" ] \
+  && ok "hard stop: each call is denied" || bad "hard stop: each call is denied" "1=$o1 2=$o2 3=$o3"
+
+# H2 — no state: the only file in hook_state is the cache.
+[ "$(ls "$STATE" | tr '\n' ' ')" = "usage_windows " ] \
+  && ok "hard stop: the hook writes no state" || bad "hard stop: the hook writes no state" "$(ls "$STATE")"
+
+# H3 — the reason must tell the model NOT to retry: a re-issued call is
+# denied again, and a model that loops on it burns the quota that is left.
+reason=$(printf '%s' "$o1" | jq -r '.hookSpecificOutput.permissionDecisionReason')
+case "$reason" in *"Do not send"*) ok "hard stop: the reason says do not retry" ;;
+                  *) bad "hard stop: the reason says do not retry" "$reason" ;; esac
+
+# H4 — the hook parses NO stdin field, so no stdin shape can open the gate:
+# empty, not JSON, and camelCase-only are all denied.
+for in_ in '' 'not json' '{"sessionId":"x","hookEventName":"PreToolUse"}'; do
+  out=$(printf '%s' "$in_" | "$SH" "$HOOK" 2>"$SBX/err"); rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$out" ] && [ ! -s "$SBX/err" ] \
+    && ok "hard stop: stdin '$in_' is denied" || bad "hard stop: stdin '$in_' is denied" "rc=$rc err=$(cat "$SBX/err")"
+done
+grep -v '^[[:space:]]*#' "$HOOK" | grep -q 'session_id\|sessionId' \
+  && bad "hard stop: no session state in the hook" "$(grep -n 'session' "$HOOK")" \
+  || ok "hard stop: no session state in the hook"
+
+# H5 — the gate OPENS by itself: a fresh value at or under 90 passes.
+windows 40 "$FUTURE" 42 "$FUTURE"
 out=$(run)
-[ -n "$out" ] && [ -f "$MARK" ] && ok "once: first call denies + stamps the marker" \
-                                || bad "once: first call denies + stamps the marker" "out=$out"
+[ -z "$out" ] && ok "hard stop: opens when the value falls" || bad "hard stop: opens when the value falls" "$out"
 
-# O2 — a call inside the batch window (parallel Agent calls in ONE message)
-# is denied too: their hooks run side by side, and letting the siblings
-# through launches N-1 subagents the model never got to reconsider.
-out=$(run)
-[ -n "$out" ] && ok "once: a sibling call inside the batch window is denied" \
-              || bad "once: a sibling call inside the batch window is denied"
-
-# O3 — the re-issued call (marker older than the batch window) passes. THE
-# assertion of this layer; mutation: drop the marker read and it goes red.
-printf '%s\n' "$(( $(now) - 60 ))" > "$MARK"
-out=$(run); rc=$?
-[ "$rc" -eq 0 ] && [ -z "$out" ] && ok "once: the re-issued call passes" \
-                                 || bad "once: the re-issued call passes" "out=$out"
-
-# O3b — the batch window must be SHORT. The deny reason promises "the next
-# Agent call passes"; a model that re-issues the call 5s later must not be
-# mistaken for a sibling of the denied batch (siblings land within ~1s).
-printf '%s\n' "$(( $(now) - 5 ))" > "$MARK"
-out=$(run)
-[ -z "$out" ] && ok "once: a call re-issued after 5s passes" \
-              || bad "once: a call re-issued after 5s passes" "the batch window is too wide"
-
-# O4 — after an hour the warning re-arms (a long session can burn a lot more).
-printf '%s\n' "$(( $(now) - 3700 ))" > "$MARK"
-out=$(run)
-[ -n "$out" ] && ok "once: re-arms after 1h" || bad "once: re-arms after 1h"
-read -r m < "$MARK"
-[ $(( $(now) - m )) -le 5 ] && ok "once: re-arm restamps the marker" || bad "once: re-arm restamps the marker" "got $m"
-
-# O5 — the marker is per SESSION: another session gets its own warning.
-reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
-printf '%s\n' "$(( $(now) - 60 ))" > "$MARK"
-out=$(run sid-2)
-[ -n "$out" ] && ok "once: a second session is warned on its own" || bad "once: a second session is warned on its own"
-
-# O6 — torn marker under dash → treated as absent (deny + restamp), never fatal.
-reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
-printf 'x.5\n' > "$MARK"
-out=$(run); rc=$?
-[ "$rc" -eq 0 ] && [ -n "$out" ] && [ ! -s "$SBX/err" ] \
-  && ok "once: torn marker is not fatal" || bad "once: torn marker is not fatal" "rc=$rc err=$(cat "$SBX/err")"
-
-# O7 — no session id → the once-only state cannot be kept, so FAIL OPEN.
-# Denying here would deny every launch forever.
-reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
-out=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Agent"}' | "$SH" "$HOOK" 2>/dev/null)
-[ -z "$out" ] && ok "no session id: fail open" || bad "no session id: fail open" "$out"
-
-# O8 — invariant #3: camelCase-only stdin still resolves the session.
-reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
-out=$(printf '{"sessionId":"sid-camel","hookEventName":"PreToolUse"}' | "$SH" "$HOOK" 2>/dev/null)
-[ -n "$out" ] && [ -f "$STATE/sid-camel_quota_warned" ] \
-  && ok "camelCase stdin: session resolved" || bad "camelCase stdin: session resolved" "$out"
-
-# O9 — a session id is external input that lands in a PATH. Anything that is
-# not a plain id must fail open, never write outside hook_state.
-reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
-out=$(printf '{"session_id":"../../escape"}' | "$SH" "$HOOK" 2>/dev/null)
-[ -z "$out" ] && [ ! -e "$HOME/escape_quota_warned" ] && [ ! -e "$HOME/.claude/escape_quota_warned" ] \
-  && ok "hostile session id: fail open, no write" || bad "hostile session id: fail open, no write" "$out"
-
-# O10 — replay children never launch gated work; the belt (MP_REPLAY_CHILD).
+# H6 — replay children never launch gated work; the belt (MP_REPLAY_CHILD).
 reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"
 out=$(stdin_for sid-1 | MP_REPLAY_CHILD=1 "$SH" "$HOOK" 2>/dev/null)
-[ -z "$out" ] && [ ! -f "$MARK" ] && ok "replay child: no-op" || bad "replay child: no-op" "$out"
+[ -z "$out" ] && ok "replay child: no-op" || bad "replay child: no-op" "$out"
 grep -v '^[[:space:]]*#' "$HOOK" | grep -q 'MP_REPLAY_CHILD.*exit 0' \
   && ok "MP_REPLAY_CHILD guard is code, not comment" || bad "MP_REPLAY_CHILD guard is code, not comment"
 
 # ══════════════════════════════════════════════════════════════════════════
 # LAYER 3 — per-account bucket. The windows belong to the account
-# CLAUDE_CONFIG_DIR selects; the once-only marker indexes the SHARED session
-# tree and stays on $HOME/.claude (project_multi_account_config_dir).
+# CLAUDE_CONFIG_DIR selects (project_multi_account_config_dir).
 # ══════════════════════════════════════════════════════════════════════════
 CFG="$SBX/.claude-work"
 mkdir -p "$CFG/hook_state"
@@ -222,9 +189,6 @@ printf '%s\n95 %s 5h\n' "$(now)" "$FUTURE" > "$CFG/hook_state/usage_windows"
 out=$(stdin_for sid-1 | CLAUDE_CONFIG_DIR="$CFG/" "$SH" "$HOOK" 2>/dev/null)
 [ -n "$out" ] && ok "cfg: reads \$CLAUDE_CONFIG_DIR/hook_state/usage_windows" \
               || bad "cfg: reads \$CLAUDE_CONFIG_DIR/hook_state/usage_windows"
-[ -f "$MARK" ] && [ ! -f "$CFG/hook_state/sid-1_quota_warned" ] \
-  && ok "cfg: the session marker stays on the shared hook_state" \
-  || bad "cfg: the session marker stays on the shared hook_state"
 
 # A2 — the OTHER account's cache must not gate this one.
 reset_sbx; rm -f "$CFG"/hook_state/*
@@ -312,8 +276,9 @@ MAN="$HERE/../install/hooks.manifest.json"
 jq -e '.entries[] | select(.event=="PreToolUse" and .matcher=="Agent" and .script=="usage-inject.sh")' \
    "$MAN" >/dev/null 2>&1 \
   && ok "manifest: PreToolUse/Agent → usage-inject.sh" || bad "manifest: PreToolUse/Agent → usage-inject.sh"
-grep -q "_quota_warned" "$HERE/../hooks/auto-save-stop.sh" \
-  && ok "GC: auto-save prunes *_quota_warned" || bad "GC: auto-save prunes *_quota_warned" "one marker per session leaks forever"
+grep -rq "_quota_warned" "$HERE/../hooks" \
+  && bad "no once-only marker left in hooks/" "$(grep -rn _quota_warned "$HERE/../hooks")" \
+  || ok "no once-only marker left in hooks/"
 
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

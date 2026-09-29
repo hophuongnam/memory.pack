@@ -259,13 +259,12 @@ matcher `Agent`, 2026-09-29): the main agent must know the quota BEFORE it
 launches a subagent. PreToolUse fires after the model decided to launch, so
 `additionalContext` arrives one launch too late — only a DENY stops the call,
 and `permissionDecisionReason` is what reaches the model. When the 5h window
-is ABOVE 90% (strict; the 7d window never gates — user decision
-2026-09-29) the hook denies ONCE per session (`hook_state/<sid>_quota_warned`,
-shared bucket, pruned at 7d by auto-save-stop): calls inside 3s of the stamp
-are siblings of the same parallel batch and are denied too, the re-issued
-call passes, and the warning re-arms after 1h. **Fails OPEN on every doubt**
-(no cache, torn row, unknown reset, no/hostile session id) — a false deny is
-a subagent kill switch. The data is `hook_state/usage_windows`
+is ABOVE 90% (strict; the 7d window never gates) the hook denies EVERY launch
+— a HARD STOP, user decision 2026-09-29. It keeps no state and parses no
+stdin field; the gate opens by itself when the statusline writes a value at
+or under 90, or when the reset time passes. The reason text tells the model
+NOT to retry. **Fails OPEN on the data** (no cache, torn row, unknown or past
+reset) — a false deny is a subagent kill switch. The data is `hook_state/usage_windows`
 (`<write_epoch>\n<pct> <resets_epoch> 5h`, per-ACCOUNT bucket), written
 by `statusline-command.sh` on every render that carries `rate_limits` —
 hooks never see that stdin, and the statusline is fresher than the 120s Stop
@@ -565,12 +564,12 @@ value at `$HOME/.claude/hook_state` with the per-account readers capped at
 exactly 2),
 `test_usage_inject` (the quota gate: Layer 1 the >90% 5h-only gate — deny
 shape, reason text, the strict 90/91 boundary, a full 7d row never gating, reset-passed and unknown-reset rows ignored,
-torn cache silent under real dash; Layer 2 deny-ONCE — batch siblings denied,
-the re-issued call passes, 1h re-arm, per-session marker, no/hostile session
-id fails open, camelCase stdin, MP_REPLAY_CHILD; Layer 3 the per-account
+torn cache silent under real dash; Layer 2 the hard stop — each call denied,
+no state written, the do-not-retry reason, no stdin shape opens the gate, the
+gate opens when the value falls, MP_REPLAY_CHILD; Layer 3 the per-account
 bucket; Layer 4 the REAL statusline as writer — integer rounding, last-good
 kept when `rate_limits` is absent, garbage never blanks the render; Layer 5
-wiring. Mutation-verified: threshold operator, re-issued-call pass,
+wiring. Mutation-verified: the strict operator, the 5h label filter, the
 reset-ahead check, float write),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
