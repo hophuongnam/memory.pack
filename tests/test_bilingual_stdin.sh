@@ -43,7 +43,7 @@ prompt:userPrompt"
 # JSON shape). _lib.sh and the .mjs workers receive argv, not stdin.
 FILES="boot-inject.sh boot-catchup.sh session-end.sh auto-save-stop.sh
 log-token-rate.sh memory-recall.sh memory-index-update.sh
-archive-resurrect.sh memory-search-inject.sh"
+archive-resurrect.sh memory-search-inject.sh orphan-backstop.sh"
 
 for f in $FILES; do
   path="$HOOKS/$f"

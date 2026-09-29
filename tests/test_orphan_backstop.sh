@@ -384,6 +384,74 @@ sweep
   && ok "B15: beyond-horizon orphan skipped" \
   || bad "B15: beyond-horizon orphan skipped" "calls=$(calls)"
 
+# B15: LIVE-SESSION veto via CC's own registry. CC writes
+# <config>/sessions/<pid>.json {pid, sessionId, procStart} for every running
+# session (fields read off a live host 2026-09-29; procStart is UTC `ps
+# lstart`). A session idle past the quiet window is quiet + unstamped +
+# marker-holding — every OTHER gate calls it an orphan — so without this the
+# sweep replayed LIVE sessions (paid) and session-end.sh deleted their boot
+# marker. pid alive + procStart equal = live. A dead pid or a REUSED pid
+# (procStart differs) must NOT veto, or a real orphan is shielded forever.
+lstart_utc() { LC_ALL=C TZ=UTC ps -p "$1" -o lstart= 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+reg() { # reg <dir> <pid> <sid> <procStart>
+  mkdir -p "$1"
+  printf '{"pid":%s,"sessionId":"%s","procStart":"%s","status":"idle"}\n' "$2" "$3" "$4" > "$1/$2.json"
+}
+reset_rec
+mk_orphan "$TMP/proj-b15" "sid-b15" 2400
+reg "$FH/.claude/sessions" "$$" "sid-b15" "$(lstart_utc $$)"
+sweep
+[ "$(calls)" = "0" ] && [ ! -f "$FH/.claude/hook_state/sid-b15_end_handled" ] \
+  && ok "B15: idle LIVE session (registry pid alive) is not swept, not claimed" \
+  || bad "B15: idle LIVE session (registry pid alive) is not swept, not claimed" "calls=$(calls)"
+
+reset_rec
+reg "$FH/.claude/sessions" "$$" "sid-b15" "Thu Jan 01 00:00:00 1970"
+sweep
+[ "$(calls)" = "1" ] \
+  && ok "B15: reused pid (procStart differs) does not shield the orphan (mutation pair)" \
+  || bad "B15: reused pid (procStart differs) does not shield the orphan" "calls=$(calls)"
+rm -f "$FH/.claude/sessions"/*.json
+
+reset_rec
+mk_orphan "$TMP/proj-b15d" "sid-b15d" 2400
+sh -c 'exit 0' & DEAD=$!; wait "$DEAD" 2>/dev/null
+reg "$FH/.claude/sessions" "$DEAD" "sid-b15d" "Thu Jan 01 00:00:00 1970"
+sweep
+[ "$(calls)" = "1" ] \
+  && ok "B15: dead registry pid does not shield the orphan" \
+  || bad "B15: dead registry pid does not shield the orphan" "calls=$(calls)"
+rm -f "$FH/.claude/sessions"/*.json
+
+# A second account's registry lives in ITS config dir (~/.claude-work), but
+# its transcripts land in the SHARED projects/ tree this sweep scans.
+reset_rec
+mk_orphan "$TMP/proj-b15w" "sid-b15w" 2400
+reg "$FH/.claude-work/sessions" "$$" "sid-b15w" "$(lstart_utc $$)"
+sweep
+[ "$(calls)" = "0" ] \
+  && ok "B15: live session of a sibling config dir (~/.claude-*) is not swept" \
+  || bad "B15: live session of a sibling config dir (~/.claude-*) is not swept" "calls=$(calls)"
+rm -rf "$FH/.claude-work"
+
+# B16: a $HOME holding a space. `for t in $(find …)` and `ls -t $CANDIDATES`
+# word-split the transcript path — the orphan was silently never swept.
+FH_SP="$TMP/home sp"; mkdir -p "$FH_SP/.claude/projects" "$FH_SP/.claude/hook_state"
+: > "$FH_SP/.claude/hook_state/orphan-baseline"; age "$FH_SP/.claude/hook_state/orphan-baseline" 99999
+for n in 1 2; do
+  T_SP="$FH_SP/.claude/projects/$(slugify "$TMP/proj-b16-$n")/sid-b16-$n.jsonl"
+  mkdir -p "$TMP/proj-b16-$n"
+  mk_transcript "$T_SP" "$TMP/proj-b16-$n" 3
+  age "$T_SP" $((2400 + n * 100))
+  printf 'none' > "$SB_B/.boot-marker-sid-b16-$n"
+done
+reset_rec
+env HOME="$FH_SP" MP_TEST_REC="$REC" MP_CURRENT_SID="sid-current" MP_ORPHAN_PASS2=0 \
+    MP_ORPHAN_QUIET_MIN=30 MP_ORPHAN_MAX=1 bash "$SB_B/orphan-backstop.sh" --sweep >/dev/null 2>&1
+[ "$(calls)" = "1" ] && grep -q '"session_id": *"sid-b16-1"' "$REC"/* 2>/dev/null \
+  && ok "B16: \$HOME with a space — orphan swept, newest-first order kept" \
+  || bad "B16: \$HOME with a space — orphan swept, newest-first order kept" "calls=$(calls) $(cat "$REC"/* 2>/dev/null | tr -d '\n' | cut -c1-200)"
+
 # ---------------------------------------------------------------------------
 # Layer C: hook mode (stdin routing)
 # ---------------------------------------------------------------------------

@@ -33,6 +33,10 @@
 #     live-but-silent session is merely swept later; a crashed one is quiet
 #     forever. A >quiet-window single tool call can fake death — bounded harm
 #     (duplicate replay; the real SessionEnd re-handles and overwrites).
+#   not live     — no <config>/sessions/<pid>.json names this session with a
+#     live pid whose start time matches (_mp_session_live below). Quiet alone
+#     cannot tell an IDLE session from a dead one: a session left open over
+#     lunch was replayed (paid) and lost its boot marker.
 #   unstamped    — no hook_state/<sid>_end_handled ledger entry (session-end.sh
 #     stamps every handled end; the stamp doubles as the sweep's atomic claim).
 #   interactive  — .boot-marker-<sid> exists in the hooks dir: the session
@@ -124,7 +128,39 @@ case "$PASS2_SLEEP" in ''|*[!0-9]*) PASS2_SLEEP=$((QUIET_MIN * 60 + 60)) ;; esac
 
 LAUNCHED=0
 
+# Live-session veto: CC's own registry, <config>/sessions/<pid>.json, carries
+# {pid, sessionId, procStart} for every running session (fields read off a
+# live host 2026-09-29). pid alive AND procStart equal to the process's UTC
+# `ps lstart` = the session is running, however long it has been idle.
+# procStart is what defeats pid reuse: a crashed session's stale registry
+# file must never shield its orphan. The glob spans sibling config dirs
+# (~/.claude-work): their registries are per-account but their transcripts
+# land in the shared projects/ tree. Anything unreadable fails toward the
+# quiet-window behavior, except an unverifiable start time on a live pid,
+# which fails toward "live" (a missed sweep is retried; a replayed live
+# session is paid for).
+_mp_session_live() {
+  for _r in "$HOME"/.claude*/sessions/*.json; do
+    [ -f "$_r" ] || continue
+    grep -q -F "$1" "$_r" 2>/dev/null || continue
+    _rec=$(jq -r --arg s "$1" 'select(.sessionId == $s) | [(.pid | tostring), (.procStart // "")] | join("\u001f")' "$_r" 2>/dev/null)
+    _rpid="${_rec%%$'\037'*}"
+    _rstart="${_rec#*$'\037'}"
+    case "$_rpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$_rpid" 2>/dev/null || continue
+    [ -n "$_rstart" ] || return 0
+    _now=$(LC_ALL=C TZ=UTC ps -p "$_rpid" -o lstart= 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')
+    [ -n "$_now" ] || return 0
+    [ "$_now" = "$(printf '%s' "$_rstart" | tr -s ' ')" ] && return 0
+  done
+  return 1
+}
+
 do_pass() {
+  # Newline-only splitting: the unquoted $(find …) and $CANDIDATES expansions
+  # below word-split on spaces, so a transcript path holding one (a $HOME
+  # with a space) was silently never swept.
+  local IFS=$'\n'
   CANDIDATES=""
   for pdir in "$HOME/.claude/projects"/*/; do
     [ -d "$pdir" ] || continue
@@ -148,6 +184,7 @@ do_pass() {
       if command -v lsof >/dev/null 2>&1 && lsof -- "$t" >/dev/null 2>&1; then
         continue
       fi
+      _mp_session_live "$sid" && continue
       if [ -z "$best" ] || [ "$t" -nt "$best" ]; then
         best="$t"
       fi
@@ -164,7 +201,8 @@ do_pass() {
       fi
     done
     [ "$superseded" = "1" ] && continue
-    CANDIDATES="$CANDIDATES $best"
+    CANDIDATES="$CANDIDATES
+$best"
   done
 
   [ -z "$CANDIDATES" ] && return 0

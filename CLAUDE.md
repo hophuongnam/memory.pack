@@ -136,6 +136,13 @@ in-horizon (`MP_ORPHAN_HORIZON_MIN`, 3d), QUIET (`MP_ORPHAN_QUIET_MIN`,
 30min — the PRIMARY liveness signal: CC does NOT hold the transcript fd
 open between writes, verified 2026-07-27 lsof-on-live-transcript exits 1,
 so lsof runs only as an opportunistic extra veto; quiet fails SAFE),
+NOT LIVE (`_mp_session_live`, 2026-09-29: quiet cannot tell an IDLE session
+from a dead one — a session left open past the window was replayed, paid,
+and lost its boot marker. CC's registry `~/.claude*/sessions/<pid>.json`
+carries `{pid, sessionId, procStart}`; pid alive AND procStart equal to the
+process's UTC `ps lstart` = live. procStart defeats pid reuse, so a crashed
+session's stale registry file never shields its orphan; the glob spans
+sibling config dirs because their transcripts share `projects/`),
 unstamped, INTERACTIVE (`.boot-marker-<sid>` present in hooks/ — positive
 evidence the session booted through boot-inject; markers survive crashes,
 are deleted only on a HANDLED end, GC'd at 3d = the horizon. Without this
