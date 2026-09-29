@@ -153,7 +153,7 @@ export async function* query() {
   const REPLAY = join(HERE, '..', 'hooks', 'replay.mjs');
   const home = join(tmp, 'home');
   const proj = join(tmp, 'proj');
-  const slug = proj.replace(/[\\/.]/g, '-');
+  const slug = proj.replace(/[^a-zA-Z0-9]/g, '-');
   const memDir = join(home, '.claude', 'projects', slug, 'memory');
   mkdirSync(memDir, { recursive: true });
   mkdirSync(proj, { recursive: true });

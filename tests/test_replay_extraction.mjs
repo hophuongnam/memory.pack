@@ -270,7 +270,7 @@ export async function* query(args) {
 `);
 
   const projCwd = join(sbx, 'Proj');
-  const memoryDir = join(sbx, '.claude', 'projects', projCwd.replace(/[\\/.]/g, '-'), 'memory');
+  const memoryDir = join(sbx, '.claude', 'projects', projCwd.replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
   mkdirSync(memoryDir, { recursive: true });
   const bootCtx = join(sbx, '.boot-context-stub');
   const modelLog = join(sbx, 'models.log');

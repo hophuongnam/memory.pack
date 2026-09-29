@@ -260,7 +260,19 @@ function run(path, sid, extraEnv = {}) {
     : bad('audit rotation: oldest lines dropped', 'old_0 line gone', 'still present');
 }
 
-rmSync(tmp, { recursive: true, force: true });
+// Each promotion detaches two real indexer processes (update-recall.mjs
+// self-locates index-memories.py), and they write <tmp>/index/search.db.
+// Deleting the sandbox under them raced: every run leaked a recreated dir,
+// and rmSync could throw ENOTEMPTY — an uncaught exit 1 with every assertion
+// green. Wait for them (their argv names this sandbox), then delete; a
+// cleanup problem must never fail the suite.
+for (let i = 0; i < 100; i++) {
+  try { execFileSync('pgrep', ['-f', tmp], { stdio: 'ignore' }); } catch { break; }
+  execFileSync('sleep', ['0.1']);
+}
+try {
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+} catch { /* cleanup only */ }
 console.log('----');
 if (fail === 0) { console.log('ALL PASS'); process.exit(0); }
 else { console.log(fail + ' FAILED'); process.exit(1); }

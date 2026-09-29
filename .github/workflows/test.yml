@@ -51,8 +51,14 @@ jobs:
       - name: Preflight (install.sh --check)
         run: ./install.sh --check
 
+      # Sandboxes live under $TMPDIR, and a fixture project path inherits its
+      # characters. ubuntu's /tmp is pure alphanumeric, so a slug-rule bug
+      # that only shows on `_` (macOS /var/folders/xx/yyy_zzz/T) passed Linux
+      # and the local host, then failed macOS CI alone (2026-09-29). Force an
+      # underscore into the path on BOTH legs.
       - name: Run all suites
         run: |
+          export TMPDIR="$RUNNER_TEMP/mp_tmp"; mkdir -p "$TMPDIR"
           fail=0
           for t in tests/test_*.sh;  do echo "== $t"; bash "$t" || { echo "FAIL $t"; fail=1; }; done
           for t in tests/test_*.mjs; do echo "== $t"; node "$t" || { echo "FAIL $t"; fail=1; }; done
