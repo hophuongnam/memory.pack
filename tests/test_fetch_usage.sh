@@ -32,6 +32,7 @@ bad() { printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
 [ -x "$WORKER" ]   || bad "worker must have +x mode"
 
 SBX=$(mktemp -d); trap 'rm -rf "$SBX"' EXIT
+export MP_USAGE_5H_FILE="$SBX/usage-5h"   # never the REAL /tmp file
 export HOME="$SBX"
 STATE="$HOME/.claude/hook_state"
 CACHE="$STATE/usage_scoped"

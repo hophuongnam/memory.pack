@@ -4,6 +4,9 @@
 # checks for the statusline-command.sh integration come later.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Never overwrite the REAL /tmp/claude-usage-5h with fixture data: the dir does
+# not exist, so the statusline write fails silently and leaves no litter.
+export MP_USAGE_5H_FILE=/nonexistent-mp-test/usage-5h
 HOOKS="$HERE/../hooks"
 THEME="$HOOKS/statusline-theme.sh"
 

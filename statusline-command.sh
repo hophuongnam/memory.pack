@@ -522,13 +522,18 @@ USAGE_CACHE="${USAGE_CFG_DIR%/}/hook_state/usage_scoped"
 # --- Persist the 5h window percentage: one line, e.g. "94" ---
 # The statusline is the ONLY place CC hands out rate_limits. A render with no
 # 5h window (first of a session) or a garbage value leaves the last-good file
-# alone. Builtins + ONE mv per render.
+# alone. Builtins + ONE mv per render. /tmp is world-writable and the tmp name
+# is guessable, so the tmp write is noclobber (O_EXCL): a planted symlink makes
+# it fail instead of overwriting the link target. mv is a rename and does not
+# follow a symlink. The { } 2>/dev/null catches the shell's own redirect error.
 # ponytail: one shared /tmp file — two accounts on one host overwrite each other.
 case "$five_h" in ''|.|*[!0-9.]*|*.*.*) ;; *)
   USAGE_5H_FILE="${MP_USAGE_5H_FILE:-/tmp/claude-usage-5h}"
-  printf '%.0f\n' "$five_h" > "$USAGE_5H_FILE.tmp.$$" 2>/dev/null \
+  set -C
+  { printf '%.0f\n' "$five_h" > "$USAGE_5H_FILE.tmp.$$"; } 2>/dev/null \
     && mv -f "$USAGE_5H_FILE.tmp.$$" "$USAGE_5H_FILE" 2>/dev/null \
-    || rm -f "$USAGE_5H_FILE.tmp.$$" 2>/dev/null ;;
+    || rm -f "$USAGE_5H_FILE.tmp.$$" 2>/dev/null
+  set +C ;;
 esac
 if [ -f "$USAGE_CACHE" ]; then
   {

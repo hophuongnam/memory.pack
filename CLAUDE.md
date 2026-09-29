@@ -258,6 +258,7 @@ carries `rate_limits.five_hour` atomically writes the 5h percentage, rounded
 to an integer, as ONE line (`94`) to `/tmp/claude-usage-5h`
 (`MP_USAGE_5H_FILE` overrides). No rate_limits or a garbage value leaves the
 last-good file alone. One file per HOST: two accounts overwrite each other.
+The tmp write is noclobber and the final `mv` is a rename (no symlink follow).
 It replaced the PreToolUse/Agent quota gate (`usage-inject.sh`), which did
 not work for the user and was removed the same day. Pinned by
 `test_usage_5h_file`.
@@ -550,8 +551,12 @@ exactly 2),
 `test_usage_5h_file` (the statusline writes `/tmp/claude-usage-5h` as one
 integer line — rounding mutation-verified, last-good kept when `rate_limits`
 or its 5h window is absent, garbage never blanks the render under real dash,
-no tmp litter; plus the removed quota gate stays removed: no hook script, no
-manifest entry),
+no tmp litter, an unwritable path SILENT on stderr, the tmp write noclobber
+(`set -C`: /tmp is world-writable and the tmp name guessable, so a planted
+symlink must fail the write, not redirect it), and every suite that feeds
+`rate_limits` to the statusline exports `MP_USAGE_5H_FILE` — the render suite
+once overwrote the REAL file with fixture `58`; plus the removed quota gate
+stays removed: no hook script, no manifest entry),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
 `.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs

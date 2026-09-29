@@ -65,5 +65,25 @@ grep -q 'usage_windows' "$SL" && bad "statusline no longer writes usage_windows"
 grep -q 'usage-inject' "$HERE/../install/hooks.manifest.json" \
   && bad "manifest has no usage-inject entry" || ok "manifest has no usage-inject entry"
 
+# W8 — an unwritable path is SILENT: the render runs on every CC event, so an
+# error line would print on each one.
+MP_USAGE_5H_FILE="$SBX/no-such-dir/f" render < "$FIX" >/dev/null
+[ ! -s "$SBX/sl.err" ] && ok "writer: unwritable path → stderr silent" || bad "writer: unwritable path → stderr silent" "$(cat "$SBX/sl.err")"
+
+# W9 — /tmp is world-writable and the tmp name is guessable: the tmp write
+# must be noclobber (O_EXCL), or a planted symlink redirects it onto any file
+# the user owns. The final mv is a rename and does not follow a symlink.
+grep -B1 'USAGE_5H_FILE.tmp.\$\$"' "$SL" | grep -q 'set -C' \
+  && ok "writer: tmp write is noclobber (set -C)" || bad "writer: tmp write is noclobber (set -C)"
+
+# W7 — no suite overwrites the REAL /tmp file with fixture data: every suite
+# that feeds rate_limits to the statusline must redirect MP_USAGE_5H_FILE.
+leak=""
+for f in "$HERE"/test_*.sh; do
+  grep -q 'statusline-command' "$f" && grep -qE 'rate_limits|five_hour|statusline-stdin' "$f" \
+    && ! grep -q 'export MP_USAGE_5H_FILE=' "$f" && leak="$leak $(basename "$f")"
+done
+[ -z "$leak" ] && ok "suites redirect MP_USAGE_5H_FILE" || bad "suites redirect MP_USAGE_5H_FILE" "$leak"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "$fail FAILED"
 exit $((fail > 0))
