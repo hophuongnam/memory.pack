@@ -6,8 +6,12 @@
 # PreToolUse fires after the model already decided to launch, so
 # additionalContext alone arrives one launch too late. Only a DENY stops the
 # call, and its permissionDecisionReason is what reaches the model. So: when
-# the 5h or the 7d window is at >= 90%, deny ONCE per session with the numbers
-# in the reason; the model decides again and the re-issued call passes.
+# the 5h window is ABOVE 90%, deny ONCE per session with the numbers in the
+# reason; the model decides again and the re-issued call passes.
+#
+# 5h ONLY (user decision 2026-09-29): the 7d window never gates. Rows with
+# any other label are ignored — a file written
+# before this decision still holds a 7d row.
 #
 # Why not the other subagent hooks (read off the 2.1.284 bundle + real
 # transcripts, 2026-09-29): SubagentStop's additionalContext is "delivered to
@@ -22,7 +26,6 @@
 # Cache (written by statusline-command.sh from CC's documented rate_limits):
 #     <write_epoch>
 #     <pct> <resets_epoch> 5h
-#     <pct> <resets_epoch> 7d
 set -u
 
 # Replay children (MP_REPLAY_CHILD from replay.mjs) run with tools:[] and
@@ -31,7 +34,7 @@ set -u
 
 input=$(cat)
 
-THRESHOLD=90
+THRESHOLD=90    # strict: the gate trips ABOVE this value
 BATCH=3         # seconds: parallel Agent calls in ONE message are all denied.
                 # Keep it SHORT: the reason promises the next call passes.
 REARM=3600      # seconds: a long session is warned again
@@ -56,8 +59,8 @@ age=""
     while read -r pct reset label; do
         case "$pct"   in ''|*[!0-9]*) continue ;; esac
         case "$reset" in ''|*[!0-9]*) continue ;; esac
-        case "$label" in 5h|7d) ;; *) continue ;; esac
-        [ "$pct" -ge "$THRESHOLD" ] || continue
+        [ "$label" = 5h ] || continue
+        [ "$pct" -gt "$THRESHOLD" ] || continue
         # Usage only grows inside a window, so a row is current exactly while
         # its reset time is ahead. Past (or the 0 sentinel) = previous window.
         [ "$reset" -gt "$now" ] || continue

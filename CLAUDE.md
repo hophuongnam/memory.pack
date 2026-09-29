@@ -258,14 +258,15 @@ reasoning: `project_multi_account_config_dir` in the project store.
 matcher `Agent`, 2026-09-29): the main agent must know the quota BEFORE it
 launches a subagent. PreToolUse fires after the model decided to launch, so
 `additionalContext` arrives one launch too late — only a DENY stops the call,
-and `permissionDecisionReason` is what reaches the model. When the 5h or 7d
-window is ≥90% the hook denies ONCE per session (`hook_state/<sid>_quota_warned`,
+and `permissionDecisionReason` is what reaches the model. When the 5h window
+is ABOVE 90% (strict; the 7d window never gates — user decision
+2026-09-29) the hook denies ONCE per session (`hook_state/<sid>_quota_warned`,
 shared bucket, pruned at 7d by auto-save-stop): calls inside 3s of the stamp
 are siblings of the same parallel batch and are denied too, the re-issued
 call passes, and the warning re-arms after 1h. **Fails OPEN on every doubt**
 (no cache, torn row, unknown reset, no/hostile session id) — a false deny is
 a subagent kill switch. The data is `hook_state/usage_windows`
-(`<write_epoch>\n<pct> <resets_epoch> 5h|7d`, per-ACCOUNT bucket), written
+(`<write_epoch>\n<pct> <resets_epoch> 5h`, per-ACCOUNT bucket), written
 by `statusline-command.sh` on every render that carries `rate_limits` —
 hooks never see that stdin, and the statusline is fresher than the 120s Stop
 worker. A row is current exactly while its reset time is ahead (usage only
@@ -562,8 +563,8 @@ planted reference in session-end.sh), and inside `statusline-command.sh` —
 allowlisted because it holds both buckets — `HOOK_STATE_DIR` is pinned by
 value at `$HOME/.claude/hook_state` with the per-account readers capped at
 exactly 2),
-`test_usage_inject` (the quota gate: Layer 1 the ≥90% gate — deny shape,
-reason text, the 89/90 boundary, reset-passed and unknown-reset rows ignored,
+`test_usage_inject` (the quota gate: Layer 1 the >90% 5h-only gate — deny
+shape, reason text, the strict 90/91 boundary, a full 7d row never gating, reset-passed and unknown-reset rows ignored,
 torn cache silent under real dash; Layer 2 deny-ONCE — batch siblings denied,
 the re-issued call passes, 1h re-arm, per-session marker, no/hostile session
 id fails open, camelCase stdin, MP_REPLAY_CHILD; Layer 3 the per-account

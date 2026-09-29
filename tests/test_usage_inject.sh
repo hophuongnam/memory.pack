@@ -8,12 +8,15 @@
 # PreToolUse fires after the model already decided to launch, so context alone
 # arrives one launch too late — only a DENY stops the call, and its reason is
 # what reaches the model. The gate therefore denies ONCE per session when the
-# 5h or 7d window is at >= 90%, then lets the re-issued call through.
+# 5h window is ABOVE 90%, then lets the re-issued call through.
+#
+# 5h ONLY (user decision 2026-09-29): the hook ignores the 7d window and the
+# statusline does not write it. The fixtures below still plant a 7d row — files written before this
+# decision hold one, and the hook must not act on it.
 #
 # Cache format (mirrors usage_scoped — label LAST, stamp line first):
 #     <write_epoch>
 #     <pct> <resets_epoch> 5h
-#     <pct> <resets_epoch> 7d
 #
 # The source is the statusline's stdin (documented `rate_limits`), not the
 # OAuth endpoint: it re-renders on every CC event, so it is fresher than the
@@ -73,22 +76,24 @@ case "$reason" in *"1h 1"[12]"m"*) ok "over: reason carries the time to reset" ;
 case "$reason" in *"7d"*) bad "over: the window under the threshold is NOT named" "$reason" ;;
                   *) ok "over: the window under the threshold is NOT named" ;; esac
 
-# G2 — both under → NO stdout at all (an empty JSON object would still be noise).
+# G2 — under → NO stdout at all (an empty JSON object would still be noise).
 reset_sbx; windows 89 "$FUTURE" 42 "$FUTURE"
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && [ -z "$out" ] && ok "under: silent, exit 0" || bad "under: silent, exit 0" "rc=$rc out=$out"
 
-# G3 — the boundary: 90 trips, 89 does not (G2). Mutation pin for the operator.
+# G3 — the boundary is STRICT: "above 90%". 90 passes, 91 trips. Mutation pin
+# for the operator, in both directions.
 reset_sbx; windows 90 "$FUTURE" 42 "$FUTURE"
 out=$(run)
-[ -n "$out" ] && ok "boundary: exactly 90 trips the gate" || bad "boundary: exactly 90 trips the gate"
+[ -z "$out" ] && ok "boundary: exactly 90 does NOT trip" || bad "boundary: exactly 90 does NOT trip" "$out"
+reset_sbx; windows 91 "$FUTURE" 42 "$FUTURE"
+out=$(run)
+[ -n "$out" ] && ok "boundary: 91 trips the gate" || bad "boundary: 91 trips the gate"
 
-# G4 — 7d alone over → deny names 7d, not 5h.
-reset_sbx; windows 10 "$FUTURE" 91 "$FUTURE"
-reason=$(run | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null)
-case "$reason" in *"7d"*"91%"*) ok "7d alone: reason carries the 7d value" ;;
-                  *) bad "7d alone: reason carries the 7d value" "$reason" ;; esac
-case "$reason" in *"5h"*) bad "7d alone: 5h is NOT named" "$reason" ;; *) ok "7d alone: 5h is NOT named" ;; esac
+# G4 — the 7d window NEVER gates, however full.
+reset_sbx; windows 10 "$FUTURE" 100 "$FUTURE"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && [ -z "$out" ] && ok "7d alone: never gates" || bad "7d alone: never gates" "$out"
 
 # G5 — a window whose reset time has passed is stale BY DEFINITION: the value
 # on disk belongs to the previous window. Usage only grows inside a window, so
@@ -241,7 +246,7 @@ if [ -f "$WIN" ]; then
   d=$(( $(now) - s_stamp )); [ "$d" -lt 0 ] && d=$(( -d ))
   [ "$d" -le 5 ] && ok "writer: line 1 is the write epoch" || bad "writer: line 1 is the write epoch" "got '$s_stamp'"
   [ "$a_pct $a_reset $a_label" = "58 9999999999 5h" ] && ok "writer: 5h row" || bad "writer: 5h row" "got '$a_pct $a_reset $a_label'"
-  [ "$b_pct $b_reset $b_label" = "31 9999999999 7d" ] && ok "writer: 7d row" || bad "writer: 7d row" "got '$b_pct $b_reset $b_label'"
+  [ -z "$b_pct$b_label" ] && ok "writer: no 7d row" || bad "writer: no 7d row" "got '$b_pct $b_reset $b_label'"
 else
   bad "writer: statusline writes usage_windows" "no $WIN"
 fi
@@ -272,17 +277,27 @@ render "$SH" < "$SBX/none.json" >/dev/null
 [ "$(cat "$WIN")" = "$before" ] && ok "writer: no rate_limits → cache untouched" \
                                 || bad "writer: no rate_limits → cache untouched" "$(cat "$WIN")"
 
-# S5 — garbage values under dash: rows skipped, render NOT blanked.
+# S5 — garbage values under dash: render NOT blanked. A garbage percentage
+# writes no row; a garbage reset lands as the 0 sentinel.
 reset_sbx
-jq '.rate_limits.five_hour = {used_percentage: "1.2.3", resets_at: "soon"}
-    | .rate_limits.seven_day = {used_percentage: 95, resets_at: "soon"}' "$FIX" > "$SBX/bad.json"
+jq '.rate_limits.five_hour = {used_percentage: "1.2.3", resets_at: "soon"}' "$FIX" > "$SBX/bad.json"
 out=$(render "$SH" < "$SBX/bad.json")
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" -ge 2 ] && ok "writer: garbage does not blank the render" \
                                                        || bad "writer: garbage does not blank the render" "$out"
 grep -q ' 5h$' "$WIN" 2>/dev/null && bad "writer: a garbage percentage writes no row" "$(cat "$WIN")" \
                                   || ok "writer: a garbage percentage writes no row"
-grep -q '^95 0 7d$' "$WIN" 2>/dev/null && ok "writer: a garbage reset lands as the 0 sentinel" \
+reset_sbx
+jq '.rate_limits.five_hour = {used_percentage: 95, resets_at: "soon"}' "$FIX" > "$SBX/bad2.json"
+render "$SH" < "$SBX/bad2.json" >/dev/null
+grep -q '^95 0 5h$' "$WIN" 2>/dev/null && ok "writer: a garbage reset lands as the 0 sentinel" \
                                        || bad "writer: a garbage reset lands as the 0 sentinel" "$(cat "$WIN" 2>/dev/null)"
+
+# S5b — only the 7d window on stdin → nothing to write, last-good survives.
+reset_sbx; windows 93 "$FUTURE" 42 "$FUTURE"; before=$(cat "$WIN")
+jq 'del(.rate_limits.five_hour)' "$FIX" > "$SBX/only7d.json"
+render "$SH" < "$SBX/only7d.json" >/dev/null
+[ "$(cat "$WIN")" = "$before" ] && ok "writer: no 5h on stdin → cache untouched" \
+                                || bad "writer: no 5h on stdin → cache untouched" "$(cat "$WIN")"
 
 # S6 — the writer follows CLAUDE_CONFIG_DIR and leaves the shared cache alone.
 reset_sbx; rm -f "$CFG"/hook_state/*
