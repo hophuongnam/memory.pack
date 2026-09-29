@@ -518,6 +518,34 @@ fi
 # writes it. See project_multi_account_config_dir in the project memory store.
 USAGE_CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 USAGE_CACHE="${USAGE_CFG_DIR%/}/hook_state/usage_scoped"
+
+# --- Persist the combined windows for hooks/usage-inject.sh ---
+# The statusline is the ONLY place CC hands out rate_limits, and hooks cannot
+# see its stdin — so the quota gate on subagent launches reads this file:
+#     <write_epoch>
+#     <pct> <resets_epoch> 5h|7d
+# Same bucket as usage_scoped (per-account). Builtins + ONE mv per render; a
+# render with no rate_limits (first of a session) leaves the last-good file
+# alone. The percentage lands as an INTEGER — the reader int-guards its rows,
+# so a float would make the gate silently never trip. Garbage writes no row;
+# a garbage reset lands as the 0 sentinel, which the reader treats as unknown.
+mp_window_row() {
+  case "$2" in ''|.|*[!0-9.]*|*.*.*) return 0 ;; esac
+  mp_wr=$3
+  case "$mp_wr" in ''|*[!0-9]*) mp_wr=0 ;; esac
+  printf '%.0f %s %s\n' "$2" "$mp_wr" "$1"
+}
+if [ -n "${five_h}${seven_d}" ]; then
+  USAGE_WINDOWS="${USAGE_CFG_DIR%/}/hook_state/usage_windows"
+  [ -d "${USAGE_WINDOWS%/*}" ] || mkdir -p "${USAGE_WINDOWS%/*}" 2>/dev/null
+  {
+    printf '%s\n' "$now"
+    mp_window_row 5h "$five_h" "$five_h_reset"
+    mp_window_row 7d "$seven_d" "$seven_d_reset"
+  } > "$USAGE_WINDOWS.tmp.$$" 2>/dev/null \
+    && mv -f "$USAGE_WINDOWS.tmp.$$" "$USAGE_WINDOWS" 2>/dev/null \
+    || rm -f "$USAGE_WINDOWS.tmp.$$" 2>/dev/null
+fi
 if [ -f "$USAGE_CACHE" ]; then
   {
     u_stamp=""

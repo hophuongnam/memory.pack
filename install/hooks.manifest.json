@@ -4,6 +4,7 @@
     { "event": "SessionStart",                          "script": "boot-inject.sh",            "timeout": 5  },
     { "event": "SessionStart",                          "script": "orphan-backstop.sh",        "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "boot-inject.sh",            "timeout": 10 },
+    { "event": "PreToolUse",       "matcher": "Agent",   "script": "usage-inject.sh",           "timeout": 5  },
     { "event": "PostToolUse",                            "script": "boot-catchup.sh",           "timeout": 5  },
     { "event": "UserPromptSubmit",                       "script": "memory-search-inject.sh",   "timeout": 5  },
     { "event": "PostToolUse",      "matcher": "Read",    "script": "memory-recall.sh",          "timeout": 3  },

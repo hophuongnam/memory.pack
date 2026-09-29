@@ -69,6 +69,25 @@ printf '{"session_id":"sid-gc-turns","stop_hook_active":false,"transcript_path":
   && ok "auto-save GC: fresh *_turns kept (mutation guard)" \
   || bad "auto-save GC: fresh *_turns kept" "sweep deleted fresh state"
 
+# --- 1a-q. auto-save-stop: stale *_quota_warned pruned, fresh kept ---------
+# usage-inject.sh stamps one ${sid}_quota_warned per session that hit the
+# quota gate — same one-file-per-session lifecycle, same prune.
+OLD_Q="$STATE_DIR/oldsess_quota_warned"
+FRESH_Q="$STATE_DIR/freshsess_quota_warned"
+echo 1 > "$OLD_Q"
+echo 2 > "$FRESH_Q"
+python3 -c "import os, time; t = time.time() - 8*86400; os.utime('$OLD_Q', (t, t))"
+
+printf '{"session_id":"sid-gc-quota","stop_hook_active":false,"transcript_path":"/nonexistent.jsonl"}' \
+  | bash "$HOOKS/auto-save-stop.sh" >/dev/null 2>&1
+
+[ ! -f "$OLD_Q" ] \
+  && ok "auto-save GC: 8-day-old *_quota_warned pruned" \
+  || bad "auto-save GC: 8-day-old *_quota_warned pruned" "still present"
+[ -f "$FRESH_Q" ] \
+  && ok "auto-save GC: fresh *_quota_warned kept (mutation guard)" \
+  || bad "auto-save GC: fresh *_quota_warned kept" "sweep deleted fresh state"
+
 # --- 1a''. auto-save-stop: stale *_end_handled pruned, baseline immune -----
 # The orphan-backstop ledger (${sid}_end_handled, written by session-end.sh
 # on every handled end) shares the same one-file-per-session lifecycle, so it

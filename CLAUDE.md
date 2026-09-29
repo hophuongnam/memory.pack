@@ -32,7 +32,8 @@ clobbered; `--uninstall` removes only symlinks pointing into `$PREFIX`).
 
 ## Architecture
 
-**15 hook registrations** (canonical list: `install/hooks.manifest.json`):
+**16 hook registrations** (canonical list: `install/hooks.manifest.json`):
+`PreToolUse` (matcher `Agent`)→usage-inject;
 `SessionStart`→boot-inject + orphan-backstop; `UserPromptSubmit`→boot-inject + memory-search-inject;
 `SessionEnd`→session-end + memory-index-reconcile; `Stop`→auto-save-stop +
 log-token-rate + fetch-usage; `PostToolUse` (matcher-less, all tools)→boot-catchup,
@@ -253,6 +254,28 @@ account. `test_fetch_usage` Layer 4 pins that boundary structurally, including
 `statusline-command.sh`, which is the one file holding BOTH kinds. Full
 reasoning: `project_multi_account_config_dir` in the project store.
 
+**Quota gate on subagent launches** (`hooks/usage-inject.sh`, PreToolUse
+matcher `Agent`, 2026-09-29): the main agent must know the quota BEFORE it
+launches a subagent. PreToolUse fires after the model decided to launch, so
+`additionalContext` arrives one launch too late — only a DENY stops the call,
+and `permissionDecisionReason` is what reaches the model. When the 5h or 7d
+window is ≥90% the hook denies ONCE per session (`hook_state/<sid>_quota_warned`,
+shared bucket, pruned at 7d by auto-save-stop): calls inside 3s of the stamp
+are siblings of the same parallel batch and are denied too, the re-issued
+call passes, and the warning re-arms after 1h. **Fails OPEN on every doubt**
+(no cache, torn row, unknown reset, no/hostile session id) — a false deny is
+a subagent kill switch. The data is `hook_state/usage_windows`
+(`<write_epoch>\n<pct> <resets_epoch> 5h|7d`, per-ACCOUNT bucket), written
+by `statusline-command.sh` on every render that carries `rate_limits` —
+hooks never see that stdin, and the statusline is fresher than the 120s Stop
+worker. A row is current exactly while its reset time is ahead (usage only
+grows inside a window), so no age cap is needed. The other subagent hooks
+are dead ends, read off bundle 2.1.284 + real transcripts: SubagentStop's
+additionalContext goes to the SUBAGENT and makes it continue (burns quota);
+PostToolUse on `Agent` fires at LAUNCH because every subagent runs in the
+background; TaskCompleted has no injection output. Pinned by
+`test_usage_inject`.
+
 **FTS5 search** (`index/`): `index-memories.py` walks all
 `~/.claude/projects/*/memory/**/*.md` → SQLite `search.db` (gitignored,
 derived, rebuilt at install — never packaged). `search-memories.py` =
@@ -335,7 +358,7 @@ or slug encoding for native without revisiting that decision.
 
 ## Tests
 
-28 suites in `tests/` — run all before any commit (CI mirrors the same
+29 suites in `tests/` — run all before any commit (CI mirrors the same
 loops on ubuntu + macos: `.github/workflows/test.yml`). Use this
 fail-propagating form — a bare `|| echo FAIL` loop exits 0 even when
 suites fail:
@@ -532,12 +555,22 @@ config-dir-scoped Keychain service name, the default dir and an explicit
 slash normalized, the config-dir plaintext fallback, the shared
 `.credentials.json` refused as a cross-account fallback, and the TTL gate
 reading the config-dir cache while a fresh SHARED stamp does not gate it.
-Layer 4 is the structural bucket boundary: no hook outside the usage trio may
+Layer 4 is the structural bucket boundary: no hook outside the usage trio
+(plus `usage-inject.sh`, the reader of the per-account `usage_windows`) may
 name CLAUDE_CONFIG_DIR (comment-stripped scan, mutation-verified against a
 planted reference in session-end.sh), and inside `statusline-command.sh` —
 allowlisted because it holds both buckets — `HOOK_STATE_DIR` is pinned by
 value at `$HOME/.claude/hook_state` with the per-account readers capped at
 exactly 2),
+`test_usage_inject` (the quota gate: Layer 1 the ≥90% gate — deny shape,
+reason text, the 89/90 boundary, reset-passed and unknown-reset rows ignored,
+torn cache silent under real dash; Layer 2 deny-ONCE — batch siblings denied,
+the re-issued call passes, 1h re-arm, per-session marker, no/hostile session
+id fails open, camelCase stdin, MP_REPLAY_CHILD; Layer 3 the per-account
+bucket; Layer 4 the REAL statusline as writer — integer rounding, last-good
+kept when `rate_limits` is absent, garbage never blanks the render; Layer 5
+wiring. Mutation-verified: threshold operator, re-issued-call pass,
+reset-ahead check, float write),
 `test_boot_catchup` (the PostToolUse mid-turn catch-up: a forkless gate
 that `exec`s boot-inject only for a LIVE `.boot-context-<hash>`, never the
 `.boot-context-last-<hash>` carry-forward snapshot — Layer 1 stubs
