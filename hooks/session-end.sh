@@ -237,6 +237,11 @@ nohup env \
       rm -f "$MP_TMP"
       ERR_TAIL=$(tail -c 400 "$MP_ERR_LOG" 2>/dev/null | tr "\n" " " | sed "s/  */ /g; s/^ *//; s/ *\$//")
       [ -z "$ERR_TAIL" ] && ERR_TAIL="(no stderr captured; exit $STATUS with empty stdout)"
+      # A context on disk here was delivered by pass 1 of THIS replay (launch
+      # moved any older one away) before the process died in pass 2. Keep the
+      # summary — the marker, log and notification below still report the
+      # failure. NO apostrophes in this block: the body is single-quoted.
+      [ -f "$MP_BOOT_CTX" ] || \
       printf "TITLE: Replay failed for prior session\nSUMMARY: replay.mjs exited %s. stderr tail: %s\nTODO: investigate %s and Memory.Pack/hooks/replay.mjs — the prior session was not summarized\nDECISIONS: none\n" "$STATUS" "$ERR_TAIL" "$MP_ERR_LOG" > "$MP_BOOT_CTX"
       printf "exit=%s\nreason=%s\n" "$STATUS" "$ERR_TAIL" > "$MP_ERR_MARKER"
       osascript -e "display notification \"Replay failed — see $MP_ERR_LOG\" with title \"$MP_NOTIFY_TITLE\"" >/dev/null 2>&1 || true

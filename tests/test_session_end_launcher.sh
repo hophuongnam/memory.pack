@@ -330,6 +330,41 @@ else
   bad "early delivery: stdout tmp cleaned up" "leftover=$(ls "$BC8".tmp* 2>/dev/null)"
 fi
 
+# --- case 9: replay dies AFTER delivering — the good context must survive ----
+# Pass 1 delivers $MP_BOOT_CTX minutes before the process exits. If the
+# process then dies during pass 2 (kill, OOM, logout), the failure branch
+# stamped the "Replay failed" banner OVER the delivered summary. The failure
+# must stay visible (marker + log) but never cost the summary.
+STUB_DIE="$SBX/bin-die"
+mkdir -p "$STUB_DIE"
+cat > "$STUB_DIE/node" <<'EOF'
+#!/bin/sh
+printf 'TITLE: delivered then died\nSUMMARY: pass 1 landed\n' > "$MP_BOOT_CTX"
+echo "killed in pass 2" >&2
+exit 137
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$STUB_DIE/osascript"
+chmod +x "$STUB_DIE/node" "$STUB_DIE/osascript"
+
+PROJ9="$SBX/Die.Proj"
+mkdir -p "$PROJ9"
+HASH9=$(printf '%s' "$PROJ9" | _mp_hash)
+BC9="$ENGINE/.boot-context-${HASH9}"
+printf '{"session_id":"sid-die","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$T" "$PROJ9" "$PROJ9" \
+  | PATH="$STUB_DIE:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+sleep 1
+if grep -q '^TITLE: delivered then died' "$BC9" 2>/dev/null; then
+  ok "death after delivery: the delivered context survives"
+else
+  bad "death after delivery: the delivered context survives" \
+      "bc=$(head -2 "$BC9" 2>/dev/null | tr '\n' '|')"
+fi
+grep -q '^exit=137' "$ENGINE/.replay-error-${HASH9}" 2>/dev/null \
+  && ok "death after delivery: failure marker still written" \
+  || bad "death after delivery: failure marker still written" \
+         "marker=$(cat "$ENGINE/.replay-error-${HASH9}" 2>/dev/null)"
+
 # --- structural: every hook a replay child can reach carries the guard ------
 # Comment-stripped: the prose above each guard names MP_REPLAY_CHILD too, so
 # a presence-only grep would survive deleting the guard itself.

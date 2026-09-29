@@ -93,7 +93,10 @@ entries, accepts string AND array-text prompts) bounded by
 `truncateConversation` (head+tail ≈200k chars — a long session must not
 blow the prompt and lose its summary). Exit codes: 0 ok, 2 benign no-op,
 3 real failure (session-end synthesizes a self-reporting "Replay failed"
-boot-context embedding the per-project `.replay-error-<hash>.log` tail).
+boot-context embedding the per-project `.replay-error-<hash>.log` tail —
+but ONLY when no context is on disk: a replay that dies in pass 2 AFTER
+pass 1 delivered keeps the delivered summary, and the failure shows through
+the error marker, the log and the notification alone, 2026-09-29).
 The detached launcher passes every dynamic value via `env` into a STATIC
 single-quoted body — interpolation was a parse error for quoted project
 paths (silent amnesia for `Nam's Proj`-style dirs).
@@ -484,7 +487,9 @@ destroyed; plus the loop-breaker behaviorally — `MP_REPLAY_CHILD=1` in the
 env means exit 0, NO launch, no boot context, and a comment-stripped scan
 that all four reachable hooks carry the guard as code; plus exit 0 with
 EMPTY stdout as a SUCCESS shape — the replay-written context survives with
-no failure marker and no tmp litter, the early-delivery contract),
+no failure marker and no tmp litter, the early-delivery contract; plus
+death AFTER delivery — a stub that writes `$MP_BOOT_CTX` then exits 137
+must leave the delivered context in place with the failure marker written),
 `test_memory_search_inject` (the FTS5 pipeline end-to-end: real indexer
 over a sandboxed store — build / nested-shape type resolution / archived
 status / incremental edit+delete sync — then the real inject hook via
