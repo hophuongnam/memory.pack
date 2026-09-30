@@ -137,15 +137,20 @@ check('replay.mjs no longer string-only on user content',
 // runs adaptive thinking BY DEFAULT when the request omits thinking config.
 // Measured replay children: 60k-115k output tokens per pass (327-624s
 // wall-clock) for ~500-token answers — thinking spend, not summary text.
-// claude-sonnet-4-6 keeps thinking OFF when omitted and tokenizes ~30%
-// smaller. MP_REPLAY_MODEL is the escape hatch (deprecation, haiku
+// 2026-09-30: pinned claude-sonnet-5-5 + explicit thinking:between_tools per pass.
+// MP_REPLAY_MODEL is the escape hatch (deprecation, haiku
 // experiments) so the next model move is an env edit, not a code edit.
 const modelHits = (replaySrc.match(/model:\s*MODEL\b/g) || []).length;
 check('both replay passes use the shared MODEL const', modelHits === 2,
   `found ${modelHits}, want 2`);
-check('MODEL defaults to pinned claude-sonnet-4-6',
-  /MP_REPLAY_MODEL\s*\|\|\s*'claude-sonnet-4-6'/.test(replaySrc),
-  'default drifted off the pin — see 2026-07-29 thinking-by-default incident');
+check('MODEL defaults to pinned claude-sonnet-5-5',
+  /MP_REPLAY_MODEL\s*\|\|\s*'claude-sonnet-5-5'/.test(replaySrc),
+  'default drifted off the pin');
+// Sonnet 5.x thinks adaptively when the request omits thinking config, so
+// BOTH passes must switch it off explicitly (the 2026-07-29 60k-token incident).
+const thinkHits = (replaySrc.match(/thinking:\s*\{\s*type:\s*'between_tools'\s*\}/g) || []).length;
+check('both replay passes turn thinking off explicitly', thinkHits === 2,
+  `found ${thinkHits}, want 2 — Sonnet 5.5 would burn tens of thousands of thinking tokens per pass`);
 check('bare sonnet alias gone from replay passes', !/model:\s*'sonnet'/.test(replaySrc),
   'alias present — floats to Sonnet 5, adaptive thinking on, 5-10x slower');
 
@@ -258,7 +263,8 @@ let calls = 0;
 export async function* query(args) {
   calls++;
   fs.appendFileSync(process.env.MP_TEST_MODEL_LOG,
-    ((args && args.options && args.options.model) || 'MISSING') + '\\n');
+    ((args && args.options && args.options.model) || 'MISSING') + ' ' +
+    ((args && args.options && args.options.thinking && args.options.thinking.type) || 'MISSING') + '\\n');
   if (calls === 1) {
     yield { type: 'result', subtype: 'success',
             result: 'TITLE: stub\\nSUMMARY: pass one done\\nTODO: none\\nDECISIONS: none' };
@@ -310,8 +316,8 @@ export async function* query(args) {
     `exit ${r.code}; stdout=${r.stdout.slice(0, 200)}`);
   const modelsR = existsSync(modelLog)
     ? readFileSync(modelLog, 'utf8').trim().split('\n') : [];
-  check('model pin: both stub passes received claude-sonnet-4-6',
-    modelsR.length === 2 && modelsR.every((m) => m === 'claude-sonnet-4-6'),
+  check('model pin: both stub passes received claude-sonnet-5-5 with thinking off',
+    modelsR.length === 2 && modelsR.every((m) => m === 'claude-sonnet-5-5 between_tools'),
     `recorded: [${modelsR.join(', ')}]`);
   check('early delivery: boot context lands at $MP_BOOT_CTX', r.deliveredAt !== null,
     'file never appeared — replay still emits only on stdout at exit');
@@ -346,7 +352,7 @@ export async function* query(args) {
   const allModels = existsSync(modelLog)
     ? readFileSync(modelLog, 'utf8').trim().split('\n') : [];
   check('model pin: MP_REPLAY_MODEL override reaches both passes',
-    allModels.length === 6 && allModels.slice(-2).every((m) => m === 'test-model-override'),
+    allModels.length === 6 && allModels.slice(-2).every((m) => m === 'test-model-override between_tools'),
     `recorded ${allModels.length} calls; last two: [${allModels.slice(-2).join(', ')}]`);
 } finally {
   rmSync(sbx, { recursive: true, force: true });
