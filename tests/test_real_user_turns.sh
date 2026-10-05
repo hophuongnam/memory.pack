@@ -309,6 +309,30 @@ wait_for_launch "sid-monster-tools" \
   && ok "session-end: 2-turn session with ~250KB raw transcript DOES replay (bytes axis)" \
   || bad "session-end: 2-turn session with ~250KB raw transcript DOES replay (bytes axis)" "node stub never invoked"
 
+# B2) the bytes axis is a free `wc -c`; once it rescues, the chars axis (a
+#     second full-file jq scan, ~28ms/MB) must not run. On a 100MB transcript
+#     the two scans together outlast CC's 5s SessionEnd timeout and the hook
+#     dies before launch. Count the `-sr` scans: 1 (turns), not 2.
+JQ_BIN="$SBX/jq-count-bin"; mkdir -p "$JQ_BIN"
+REAL_JQ="$(command -v jq)"
+cat > "$JQ_BIN/jq" <<JQSTUB
+#!/bin/sh
+case " \$* " in *" -sr "*) echo x >> "$SBX/jq-sr-count" ;; esac
+exec "$REAL_JQ" "\$@"
+JQSTUB
+chmod +x "$JQ_BIN/jq"
+rm -f "$SBX/jq-sr-count" "$SBX/node-invoked-sid-monster-tools2"
+printf '{"session_id":"sid-monster-tools2","transcript_path":"%s","cwd":"%s","workspace":{"project_dir":"%s"}}' \
+    "$TOOLY" "$PROJ" "$PROJ" \
+  | PATH="$JQ_BIN:$STUB_BIN:$PATH" bash "$ENGINE/session-end.sh" >/dev/null 2>&1
+scans=$(wc -l < "$SBX/jq-sr-count" 2>/dev/null | tr -d ' ')
+[ "$scans" = "1" ] \
+  && ok "session-end: bytes-rescued session runs ONE transcript scan (chars pass skipped)" \
+  || bad "session-end: bytes-rescued session runs ONE transcript scan" "got ${scans:-0} -sr scans"
+wait_for_launch "sid-monster-tools2" \
+  && ok "session-end: bytes-rescued session still launches with the chars pass skipped" \
+  || bad "session-end: bytes-rescued session still launches" "node stub never invoked"
+
 # C) 0-turn guard: huge raw but ZERO real prompts (headless/programmatic
 #    run) must still skip + carry forward — no human thread to carry.
 ZERO="$SBX/zeroturn.jsonl"

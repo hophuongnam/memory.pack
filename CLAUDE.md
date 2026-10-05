@@ -130,8 +130,15 @@ outage a crash only costs a banner. Pinned by `test_replay_extraction` +
 2026-07-27): SessionEnd does NOT fire on abnormal termination
 (crash/force-quit/terminal closed), so before this a crashed session was
 never replayed — no boot context, no pending-memory mining. session-end.sh
-now stamps `~/.claude/hook_state/<sid>_end_handled` on EVERY invocation
-(launch, trivial-skip, skip-sentinel alike); the backstop detaches a sweep
+now stamps `~/.claude/hook_state/<sid>_end_handled` at every DECISION
+(launch, trivial-skip, skip-sentinel alike) — at the decision, never up
+front (2026-10-05): CC kills the hook at its 5s timeout and the transcript
+scans cost ~28ms/MB each, so an up-front stamp marked a hook killed mid-scan
+as handled, with no replay and no sweep. For the same budget the trivial gate
+checks raw bytes first and runs the chars scan only when bytes did not
+rescue. `orphan-backstop.sh` hook mode drops the starting session's own
+stamp: `claude --resume` reuses the original session id, so a crash after a
+resume was otherwise handled forever. The backstop detaches a sweep
 (hook mode exits instantly — the 5s SessionStart budget is never spent
 scanning) over ALL `~/.claude/projects/*/*.jsonl` and, per project, picks
 the newest transcript that is post-baseline (`hook_state/orphan-baseline`
@@ -465,7 +472,9 @@ turn counters count REAL prompts, not tool_result/isMeta entries — a real
 594-line transcript held 153 user-type entries but 2 prompts — AND the
 substance rescue: few-turn sessions big on either axis (conversation
 chars / raw bytes) must replay, 0-turn headless must not, `MP_REPLAY_MIN_*`
-knobs mutation-pinned in both directions; the chars helper mirrors
+knobs mutation-pinned in both directions; a bytes-rescued session runs
+exactly ONE `jq -sr` transcript scan (the chars pass is skipped — hook
+timeout budget); the chars helper mirrors
 `extractConversation` incl. first-assistant-block-only; plus auto-save-stop
 caching `<since_last> <interval>` to `${sid}_turns` every Stop for the
 statusline countdown — value-pinned, skipped on 0-turn Stops; plus the
@@ -576,7 +585,9 @@ slow prior-session replay landing after both poll windows must not leave a
 long turn blind),
 `test_orphan_backstop` (the crash-orphan sweep: Layer A pins session-end.sh
 stamping `<sid>_end_handled` on every handled path — launch, trivial-skip,
-skip-sentinel — mutation-verified; Layer B drives the real sweep with a
+skip-sentinel — mutation-verified, and NOT before the transcript scan
+finishes (A4: a jq stub records a stamp that exists mid-scan — a hook killed
+at the timeout must stay sweepable); Layer B drives the real sweep with a
 RECORDING session-end stub: happy-path synthesized stdin field-exact,
 baseline self-init + pre-baseline exemption, quiet-window, horizon,
 current-session exclusion, stamped skip, marker gate (a marker-less
@@ -587,8 +598,9 @@ newest-per-project, `MP_ORPHAN_MAX` cap with newest-first ordering,
 unverifiable-cwd skip-without-claim, lsof-veto mutation pair,
 skip-replay-sentinel honored-not-consumed, and two-pass claim idempotence
 — quiet/baseline/supersede/cwd-verify/ordering all mutation-verified;
-Layer C pins hook-mode routing incl. the MP_REPLAY_CHILD belt and
-camelCase-only stdin; Layer D pins the manifest registration, the
+Layer C pins hook-mode routing incl. the MP_REPLAY_CHILD belt,
+camelCase-only stdin, and a starting session dropping its OWN end stamp
+while a foreign stamp stays (C4, the resume-then-crash gap); Layer D pins the manifest registration, the
 noclobber claim, and the stamped-skip cost guard — that one structurally,
 since dropping it is behaviorally equivalent by design: the claim is the
 correctness belt, the filter only keeps handled transcripts away from the

@@ -34,14 +34,20 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
 [ -z "$SESSION_ID" ] && exit 0
 
-# Orphan-backstop ledger: record that this session's end reached the handler,
-# BEFORE any branch below (launch, trivial-skip, skip-sentinel — all count as
-# handled). orphan-backstop.sh treats a quiet, post-baseline, UNSTAMPED
-# transcript as a crashed session and re-drives it through this script;
-# without an unconditional stamp every cleanly-ended session would look like
-# a crash and be replayed twice. GC'd by auto-save-stop.sh's 7-day sweep.
-mkdir -p "$HOME/.claude/hook_state" 2>/dev/null
-: > "$HOME/.claude/hook_state/${SESSION_ID}_end_handled"
+# Orphan-backstop ledger: record that this session's end reached a DECISION
+# (launch, trivial-skip, skip-sentinel — all count as handled).
+# orphan-backstop.sh treats a quiet, post-baseline, UNSTAMPED transcript as a
+# crashed session and re-drives it through this script; without a stamp on
+# every path each cleanly-ended session would look like a crash and be
+# replayed twice. GC'd by auto-save-stop.sh's 7-day sweep.
+# Called at each decision point, NOT up front: CC kills this hook at its
+# timeout (5s), and the transcript scans below take ~28ms/MB each. A stamp
+# written before the scan marked a hook killed mid-scan as "handled" — no
+# replay, no carry-forward, and the sweep skipped it forever.
+stamp_handled() {
+  mkdir -p "$HOME/.claude/hook_state" 2>/dev/null
+  : > "$HOME/.claude/hook_state/${SESSION_ID}_end_handled"
+}
 
 # Scope boot context + pid file per-project so project A's replay can't leak
 # into project B's next session. PROJECT_KEY is resolved against CC's
@@ -93,6 +99,7 @@ carry_forward() {
 SKIP_SENTINEL="$SCRIPT_DIR/.skip-replay-${PROJECT_HASH}"
 if [ -f "$SKIP_SENTINEL" ]; then
   rm -f "$SKIP_SENTINEL"
+  stamp_handled
   carry_forward "replay skipped by user request"
   osascript -e "display notification \"Replay skipped\" with title \"Claude Code · $PROJECT_NAME\"" >/dev/null 2>&1 || true
   exit 0
@@ -124,7 +131,6 @@ TURNS=$(_mp_real_user_turns "$TRANSCRIPT")
 if [ "$TURNS" -le 5 ]; then
   RESCUE=0
   if [ "$TURNS" -gt 0 ]; then
-    CONV_CHARS=$(_mp_conversation_chars "$TRANSCRIPT")
     RAW_BYTES=$(wc -c 2>/dev/null < "$TRANSCRIPT" | tr -d '[:space:]')
     case "$RAW_BYTES" in ''|*[!0-9]*) RAW_BYTES=0 ;; esac
     # Knobs must be pure integers — a garbage env value would error the
@@ -133,16 +139,21 @@ if [ "$TURNS" -le 5 ]; then
     case "$MIN_CHARS" in ''|*[!0-9]*) MIN_CHARS=25000 ;; esac
     MIN_BYTES="${MP_REPLAY_MIN_BYTES:-200000}"
     case "$MIN_BYTES" in ''|*[!0-9]*) MIN_BYTES=200000 ;; esac
-    if [ "$CONV_CHARS" -ge "$MIN_CHARS" ] \
-       || [ "$RAW_BYTES" -ge "$MIN_BYTES" ]; then
+    # Bytes first: `wc -c` is free, the chars axis is a second full-file jq
+    # scan. A transcript big enough to rescue on bytes is exactly the one
+    # where that second scan can outlast the hook timeout.
+    if [ "$RAW_BYTES" -ge "$MIN_BYTES" ] \
+       || [ "$(_mp_conversation_chars "$TRANSCRIPT")" -ge "$MIN_CHARS" ]; then
       RESCUE=1
     fi
   fi
   if [ "$RESCUE" -eq 0 ]; then
+    stamp_handled
     carry_forward "session had $TURNS user turn(s) — too short to replay"
     exit 0
   fi
 fi
+stamp_handled
 
 # Resolve replay script location (follow symlinks to find co-located replay.mjs)
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"

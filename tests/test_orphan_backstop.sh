@@ -131,6 +131,31 @@ se_a "sid-a3" "$TR_A3"
   && ok "A3: sentinel still consumed (existing contract intact)" \
   || bad "A3: sentinel still consumed" "sentinel left behind"
 
+# A4: the stamp must NOT exist while the transcript scan still runs. CC kills
+# a SessionEnd hook at its timeout (5s here), and the two full-file jq scans
+# take ~28ms/MB each: a 100MB transcript dies mid-scan. A stamp written before
+# the scan then marks a never-replayed session "handled" and the sweep skips
+# it forever. The jq stub records a stamp that exists during a `-sr` scan.
+BIN_A4="$TMP/bin-a4"; mkdir -p "$BIN_A4"
+cp "$BIN_A/node" "$BIN_A4/node"
+REAL_JQ="$(command -v jq)"
+cat > "$BIN_A4/jq" <<JQSTUB
+#!/bin/sh
+case " \$* " in *" -sr "*) [ -f "$FH_A/.claude/hook_state/sid-a4_end_handled" ] && : > "$TMP/a4-early" ;; esac
+exec "$REAL_JQ" "\$@"
+JQSTUB
+chmod +x "$BIN_A4/jq"
+TR_A4="$FH_A/.claude/projects/$SLUG_A/sid-a4.jsonl"
+mk_transcript "$TR_A4" "$PROJ_A" 6
+printf '{"session_id":"sid-a4","transcript_path":"%s","cwd":"%s"}' "$TR_A4" "$PROJ_A" \
+  | HOME="$FH_A" PATH="$BIN_A4:$PATH" bash "$SB_A/session-end.sh" >/dev/null 2>&1
+[ ! -f "$TMP/a4-early" ] \
+  && ok "A4: no stamp while the transcript scan runs (a timeout kill stays sweepable)" \
+  || bad "A4: no stamp while the transcript scan runs" "stamp existed before the gate finished"
+[ -f "$FH_A/.claude/hook_state/sid-a4_end_handled" ] \
+  && ok "A4: stamp lands when the gate finishes" \
+  || bad "A4: stamp lands when the gate finishes" "stamp missing"
+
 # ---------------------------------------------------------------------------
 # Layer B: the sweep, with session-end.sh STUBBED (records synthesized stdin)
 # ---------------------------------------------------------------------------
@@ -485,6 +510,23 @@ printf '{"sessionId":"sid-c3","source":"startup"}' \
 [ -f "$FH_C3/.claude/hook_state/orphan-baseline" ] \
   && ok "C3: camelCase-only stdin still sweeps (bilingual)" \
   || bad "C3: camelCase-only stdin still sweeps" "no baseline — sweep never ran"
+
+# C4: a session that starts again re-arms its own ledger entry. `claude
+# --resume` reuses the ORIGINAL session id (--fork-session is the opt-out), so
+# a resumed session still carries the stamp of its first end; a crash after
+# the resume was then "handled" forever. Another session's stamp stays.
+FH_C4="$TMP/home-c4"; mkdir -p "$FH_C4/.claude/hook_state"
+: > "$FH_C4/.claude/hook_state/sid-c4_end_handled"
+: > "$FH_C4/.claude/hook_state/sid-other_end_handled"
+printf '{"sessionId":"sid-c4","source":"resume"}' \
+  | env HOME="$FH_C4" MP_ORPHAN_SYNC=1 MP_TEST_REC="$REC" \
+    bash "$SB_B/orphan-backstop.sh" >/dev/null 2>&1
+[ ! -f "$FH_C4/.claude/hook_state/sid-c4_end_handled" ] \
+  && ok "C4: resumed session drops its own end stamp" \
+  || bad "C4: resumed session drops its own end stamp" "stamp still present"
+[ -f "$FH_C4/.claude/hook_state/sid-other_end_handled" ] \
+  && ok "C4: another session's stamp is untouched" \
+  || bad "C4: another session's stamp is untouched" "foreign stamp removed"
 
 # ---------------------------------------------------------------------------
 # Layer D: structural pins

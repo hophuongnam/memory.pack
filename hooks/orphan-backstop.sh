@@ -92,6 +92,10 @@ if [ "${1:-}" != "--sweep" ]; then
   INPUT=$(cat)
   SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // empty')
   SOURCE=$(echo "$INPUT" | jq -r '.source // empty')
+  # A session that starts again is live again: drop its own end stamp.
+  # `claude --resume` reuses the ORIGINAL session id, so without this a crash
+  # after a resume stayed "handled" forever. The clean end re-stamps it.
+  [ -n "$SESSION_ID" ] && rm -f "$STATE_DIR/${SESSION_ID}_end_handled"
   # Sweep only on a genuinely fresh session. resume/clear/compact re-fire
   # SessionStart for an already-running conversation; an absent source (older
   # CC) is treated as startup so the net still exists there.
