@@ -445,7 +445,12 @@ at the 30%/10%-of-interval boundaries, since>interval clamped to `0↓`,
 absent file → hidden, and a corrupt/torn file (a float or bare identifier)
 must NOT blank the whole render — a FATAL arithmetic error under dash
 (Linux /bin/sh), suite-run under real `/bin/dash` where present (macOS and
-CI ubuntu both ship it), as are the garbage rate-limit-epoch renders),
+CI ubuntu both ship it), as are the garbage rate-limit-epoch renders; plus the 7d pace limit —
+the 7d bar turns yellow at `days_elapsed × 14` (14, 28, … 84, 98) and FULL
+mode prints that limit between the percentage and the bar,
+`33% | 70% ▓▓▓▓░░░░░░`; medium/narrow omit it for the column budget, a
+garbage `resets_at` has no pace so no limit, formula/gate/guard each
+mutation-verified),
 `test_bilingual_stdin` (invariant #3 across EVERY stdin-parsing hook:
 structural scan that any JSON-accessor read of a snake_case CC field
 carries its camel twin on the same line, plus behavioral camel-only

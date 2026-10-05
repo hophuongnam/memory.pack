@@ -1196,5 +1196,45 @@ if [ -f "$SL" ]; then
                                               || ok "scoped: torn stamp → segment dropped (age unknowable)"
 fi
 
+# ─── 7d pace limit: "33% | 70% ▓▓▓▓░░░░░░" ───────────────────────────────
+# The 7d bar turns yellow at days_elapsed × 14 (14, 28, … 84, 98). Full mode
+# prints that limit between the percentage and the bar. Medium and narrow
+# omit it: line 2 has no spare columns there.
+if [ -f "$SL" ]; then
+  FIX_PACE="$TMPHOME/.claude/stdin-pace.json"
+  # 2d + 1h left → days_left 2 → day 5 → limit 70. The 1h margin keeps the
+  # integer division stable while the test runs.
+  jq --argjson r "$(( $(date +%s) + 2*86400 + 3600 ))" \
+    '.rate_limits.seven_day.used_percentage = 33 | .rate_limits.seven_day.resets_at = $r' \
+    "$FIX/statusline-stdin-full.json" > "$FIX_PACE"
+  pace_l2() { # $1 = COLUMNS, $2 = shell; ANSI stripped, 7d segment only
+    COLUMNS="$1" HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 "${2:-bash}" "$SL" < "$FIX_PACE" 2>/dev/null \
+      | sed -n '2p' | sed "s/$(printf '\033')\[[0-9;]*m//g" | sed 's/.*7d//'
+  }
+  seg=$(pace_l2 200)
+  case "$seg" in
+    " 33% | 70% ▓"*) ok "7d pace: full mode renders '33% | 70% ▓…'" ;;
+    *) bad "7d pace: full mode renders '33% | 70% ▓…'" "7d segment: $seg" ;;
+  esac
+  case "$seg" in *'%%'*) bad "7d pace: no doubled %% in output" "$seg" ;; *) ok "7d pace: no doubled %% in output" ;; esac
+  for cols in 72 48; do
+    case "$(pace_l2 $cols)" in
+      *'|'*) bad "7d pace: COLUMNS=$cols omits the limit" "$(pace_l2 $cols)" ;;
+      *) ok "7d pace: COLUMNS=$cols omits the limit" ;;
+    esac
+  done
+  if command -v dash >/dev/null 2>&1; then
+    case "$(pace_l2 200 dash)" in
+      " 33% | 70% ▓"*) ok "7d pace: dash renders the limit" ;;
+      *) bad "7d pace: dash renders the limit" "$(pace_l2 200 dash)" ;;
+    esac
+  fi
+  # 5h and ctx never show a limit; a garbage resets_at has no pace → no limit.
+  n=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_PACE" 2>/dev/null | sed -n '2p' | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -o ' | ' | wc -l | tr -d ' ')
+  [ "$n" = "1" ] && ok "7d pace: only the 7d segment carries a limit" || bad "7d pace: only the 7d segment carries a limit" "count $n"
+  COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_BADEPOCH" 2>/dev/null | sed -n '2p' | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -q ' | ' \
+    && bad "7d pace: garbage resets_at → no limit shown" || ok "7d pace: garbage resets_at → no limit shown"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fail FAILED"; exit 1; }

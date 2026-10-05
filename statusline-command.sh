@@ -278,7 +278,7 @@ pill="$(ansi_bg "$anchor")$(ansi_fg "$pill_fg") ${pill_label} ${RESET}"
 format_pct() {
   label="$1"; val="$2"; reset_epoch="$3"
   warn_at="${4:-50}"; crit_at="${5:-80}"; bar_width="${6:-10}"
-  compact="${7:-}"
+  compact="${7:-}"; show_limit="${8:-}"
   # `bare` = percentage only, no bar and no ↻ countdown. Narrow always renders
   # bare. `compact` callers (the per-model scoped windows) also render bare in
   # MEDIUM: ctx+5h+7d already spend ~66 of medium's 80 columns at bar width 6,
@@ -313,10 +313,16 @@ format_pct() {
     r=$(format_reset "$reset_epoch")
     [ -n "$r" ] && reset_str=" \033[2m↻${r}${RESET}"
   fi
+  # `show_limit` (7d only): print the warn threshold after the percentage,
+  # "33% | 70% ▓▓▓▓". Full mode only — medium has no spare columns on line 2.
+  # %% here, not %%%%: the string rides a %s argument, so only the OUTER printf
+  # (which uses $parts as its format) converts it.
+  limit_str=""
+  [ -n "$show_limit" ] && [ "$mode" = "full" ] && limit_str=" \033[2m|${RESET} ${warn_at}%%"
   if [ -n "$bare" ]; then
     printf "%s %s%s%%%%${RESET}" "$label" "$fill_ansi" "$pct"
   else
-    printf "%s %s%s%%%%${RESET} %s${RESET}%s" "$label" "$fill_ansi" "$pct" "$bar" "$reset_str"
+    printf "%s %s%s%%%%${RESET}%s %s${RESET}%s" "$label" "$fill_ansi" "$pct" "$limit_str" "$bar" "$reset_str"
   fi
 }
 
@@ -473,7 +479,7 @@ if [ -n "$five_h" ]; then
 fi
 if [ -n "$seven_d" ]; then
   [ -n "$parts" ] && parts="${parts}${sep}"
-  seven_d_warn=80
+  seven_d_warn=80; seven_d_limit=""
   # Int-guard before $(( )) — same class as format_reset: a non-integer
   # resets_at was FATAL under dash at this top-level site, blanking lines
   # 2-3 of every render. Non-integer → keep the static default threshold.
@@ -484,11 +490,13 @@ if [ -n "$seven_d" ]; then
       [ "$days_left" -lt 0 ] && days_left=0
       [ "$days_left" -gt 7 ] && days_left=7
       days_elapsed=$(( 7 - days_left ))
-      seven_d_warn=$(( days_elapsed * 100 / 7 ))
+      # Pace limit: 14 points per started day (14, 28, … 84, 98).
+      seven_d_warn=$(( days_elapsed * 14 ))
       [ "$seven_d_warn" -lt 14 ] && seven_d_warn=14
+      seven_d_limit=1
       ;;
   esac
-  parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10)"
+  parts="${parts}$(format_pct "$(ansi_fg "$THEME_FG_7D_ICON")${ICON_7D}${RESET} 7d" "$seven_d" "$seven_d_reset" "$seven_d_warn" 90 10 "" "$seven_d_limit")"
 fi
 
 # --- Per-model ("scoped") usage windows ---
