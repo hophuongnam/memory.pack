@@ -1217,6 +1217,12 @@ if [ -f "$SL" ]; then
     *) bad "7d pace: full mode renders '33% | 70% ▓…'" "7d segment: $seg" ;;
   esac
   case "$seg" in *'%%'*) bad "7d pace: no doubled %% in output" "$seg" ;; *) ok "7d pace: no doubled %% in output" ;; esac
+  # The limit is secondary data: dim, like the ↻ reset countdown.
+  raw=$(COLUMNS=200 HOME="$TMPHOME" MEMORY_PACK_NERDFONT=0 bash "$SL" < "$FIX_PACE" 2>/dev/null | sed -n '2p')
+  case "$raw" in
+    *"$(printf '\033')[2m| 70%$(printf '\033')[0m"*) ok "7d pace: limit renders dim" ;;
+    *) bad "7d pace: limit renders dim" "$(printf '%s' "$raw" | od -c | head -5)" ;;
+  esac
   for cols in 72 48; do
     case "$(pace_l2 $cols)" in
       *'|'*) bad "7d pace: COLUMNS=$cols omits the limit" "$(pace_l2 $cols)" ;;

@@ -316,9 +316,9 @@ format_pct() {
   # `show_limit` (7d only): print the warn threshold after the percentage,
   # "33% | 70% ▓▓▓▓". Full mode only — medium has no spare columns on line 2.
   # %% here, not %%%%: the string rides a %s argument, so only the OUTER printf
-  # (which uses $parts as its format) converts it.
+  # (which uses $parts as its format) converts it. Dim, like the ↻ countdown.
   limit_str=""
-  [ -n "$show_limit" ] && [ "$mode" = "full" ] && limit_str=" \033[2m|${RESET} ${warn_at}%%"
+  [ -n "$show_limit" ] && [ "$mode" = "full" ] && limit_str=" \033[2m| ${warn_at}%%${RESET}"
   if [ -n "$bare" ]; then
     printf "%s %s%s%%%%${RESET}" "$label" "$fill_ansi" "$pct"
   else
